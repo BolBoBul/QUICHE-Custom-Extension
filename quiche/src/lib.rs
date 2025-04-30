@@ -7465,6 +7465,53 @@ impl Connection {
             },
 
             frame::Frame::DatagramHeader { .. } => unreachable!(),
+
+            frame::Frame::AddressRequest { address } => {
+                // When we receive an AddressRequest frame, we need to check if the
+                // address is valid for the current path. If it is, we can send an
+                // AddressResponse frame back to the peer.
+                let path = self.paths.get_mut(recv_path_id)?;
+                let local_addr = path.local_addr();
+                let peer_addr = path.peer_addr();
+
+                let new_path = path::Path::new(
+                    address,
+                    peer_addr,
+                    &self.recovery_config,
+                    self.path_challenge_recv_max_queue,
+                    self.path_challenge_send_max_queue,
+                    self.pmtud_config,
+                )?;
+                let new_path_id = self.paths.add(new_path)?;
+                let new_path = self.paths.get_mut(new_path_id)?;
+
+                new_path.active_dcid_seq = Some(0);
+                new_path.active_dcid = Some(self.ids.get_dcid(0)?.cid.clone());
+
+            },
+
+            frame::Frame::AddressResponse { address } => {
+                // When we receive an AddressResponse frame, we need to check if the
+                // address is valid for the current path. If it is, we can send an
+                // AddressRequest frame back to the peer.
+                let path = self.paths.get_mut(recv_path_id)?;
+                let local_addr = path.local_addr();
+                let peer_addr = path.peer_addr();
+
+                let new_path = path::Path::new(
+                    local_addr,
+                    address,
+                    &self.recovery_config,
+                    self.path_challenge_recv_max_queue,
+                    self.path_challenge_send_max_queue,
+                    self.pmtud_config,
+                )?;
+                let new_path_id = self.paths.add(new_path)?;
+                let new_path = self.paths.get_mut(new_path_id)?;
+
+                new_path.active_dcid_seq = Some(0);
+                new_path.active_dcid = Some(self.ids.get_dcid(0)?.cid.clone());
+            },
         }
 
         Ok(())
