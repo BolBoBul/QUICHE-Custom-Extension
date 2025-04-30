@@ -184,6 +184,14 @@ pub enum Frame {
     DatagramHeader {
         length: usize,
     },
+
+    AddressRequest {
+        address: Vec<u8>,
+    },
+
+    AddressResponse {
+        address: Vec<u8>,
+    },
 }
 
 impl Frame {
