@@ -186,10 +186,12 @@ pub enum Frame {
     },
 
     AddressRequest {
+        // This is the address of the peer that we want to send to.
         address: Vec<u8>,
     },
 
     AddressResponse {
+        // This is the address of the peer that we want to send to.
         address: Vec<u8>,
     },
 }
@@ -336,6 +338,14 @@ impl Frame {
             },
 
             0x1e => Frame::HandshakeDone,
+
+            0x1f => Frame::AddressRequest {     // AddressRequest
+                address: b.get_bytes_with_varint_length()?.to_vec(),
+            },
+
+            0x20 => Frame::AddressResponse {    // AddressResponse
+                address: b.get_bytes_with_varint_length()?.to_vec(),
+            },
 
             0x30 | 0x31 => parse_datagram_frame(frame_type, b)?,
 
@@ -601,6 +611,18 @@ impl Frame {
             },
 
             Frame::DatagramHeader { .. } => (),
+
+            Frame::AddressRequest { address } => {
+                b.put_varint(0x1f)?;
+
+                b.put_bytes(address.as_ref())?;
+            },
+
+            Frame::AddressResponse { address } => {
+                b.put_varint(0x20)?;
+
+                b.put_bytes(address.as_ref())?;
+            },
         }
 
         Ok(before - b.cap())
@@ -815,6 +837,16 @@ impl Frame {
                 1 + // frame type
                 2 + // length, always encode as 2-byte varint
                 *length // data
+            },
+
+            Frame::AddressRequest { address } => {
+                1 + // frame type
+                address.len() // address
+            },
+
+            Frame::AddressResponse { address } => {
+                1 + // frame type
+                address.len() // address
             },
         }
     }
@@ -1041,6 +1073,14 @@ impl Frame {
                 length: *length as u64,
                 raw: None,
             },
+
+            Frame::AddressRequest { address } => QuicFrame::AddressRequest {
+                address: qlog::HexSlice::maybe_string(Some(address)),   // TODO: pick the address type some how
+            },
+
+            Frame::AddressResponse { address } => QuicFrame::AddressResponse {
+                address: qlog::HexSlice::maybe_string(Some(address)),   // TODO: pick the address type some how
+            },
         }
     }
 }
@@ -1207,6 +1247,16 @@ impl std::fmt::Debug for Frame {
 
             Frame::DatagramHeader { length } => {
                 write!(f, "DATAGRAM len={length}")?;
+            },
+
+            Frame::AddressRequest { address } => {
+                // Format the address as hex.
+                write!(f, "ADDRESS_REQUEST address={address:02x?}")?;
+            },
+
+            Frame::AddressResponse { address } => {
+                // Format the address as hex.
+                write!(f, "ADDRESS_RESPONSE address={address:02x?}")?;
             },
         }
 
