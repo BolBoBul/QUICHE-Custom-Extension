@@ -575,6 +575,8 @@ pub struct TransportParametersSet {
     pub preferred_address: Option<PreferredAddress>,
 
     pub unknown_parameters: Vec<UnknownTransportParameter>,
+
+    pub address_discovery: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
