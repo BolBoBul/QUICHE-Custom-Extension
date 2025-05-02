@@ -46,6 +46,7 @@ pub const MAX_CRYPTO_OVERHEAD: usize = 8;
 pub const MAX_DGRAM_OVERHEAD: usize = 2;
 pub const MAX_STREAM_OVERHEAD: usize = 12;
 pub const MAX_STREAM_SIZE: u64 = 1 << 62;
+pub const ADDRESS_DISCOVERY: u64 = 0x9f81a176;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EcnCounts {
@@ -185,15 +186,30 @@ pub enum Frame {
         length: usize,
     },
 
-    AddressRequest {
-        // This is the address of the peer that we want to send to.
-        address: Vec<u8>,
+    // The following frames are not part of the QUIC spec, but are used by
+    // quiche to implement the QUIC transport protocol.
+
+    // Introducing new frame type OBSERVED_ADDRESS 
+    // This frame is used to inform the peer about the address it is using to
+
+    ObservedAddress {
+        // This is the address of the peer that we are using to send packets to.
+
+        // - frame_type: can take values O, 1 or 2. Check the ffi.rs file for more information.
+        // - sequence_number: a unique number for each frame.
+        // - adress_v4: The IPv4 address.  Only present if the least significant bit of the frame type is 0.
+        // - adress_v6: The IPv6 address.  Only present if the least significant bit of the frame type is 1.
+        // - port: the port of the peer.
+
+
+        frame_type: u8,
+        sequence_number: u64,
+        address_v4: u32,
+        address_v6: Option<u128>,
+        port: u16,
     },
 
-    AddressResponse {
-        // This is the address of the peer that we want to send to.
-        address: Vec<u8>,
-    },
+
 }
 
 impl Frame {
@@ -339,13 +355,7 @@ impl Frame {
 
             0x1e => Frame::HandshakeDone,
 
-            0x1f => Frame::AddressRequest {     // AddressRequest
-                address: b.get_bytes_with_varint_length()?.to_vec(),
-            },
-
-            0x20 => Frame::AddressResponse {    // AddressResponse
-                address: b.get_bytes_with_varint_length()?.to_vec(),
-            },
+            
 
             0x30 | 0x31 => parse_datagram_frame(frame_type, b)?,
 
@@ -612,17 +622,28 @@ impl Frame {
 
             Frame::DatagramHeader { .. } => (),
 
-            Frame::AddressRequest { address } => {
-                b.put_varint(0x1f)?;
+            Frame::ObservedAddress {
+                frame_type,
+                sequence_number,
+                address_v4,
+                address_v6,
+                port,
+            } => {
+                b.put_varint(*frame_type as u64)?;
 
-                b.put_bytes(address.as_ref())?;
+                b.put_varint(*sequence_number)?;
+
+                if *frame_type & 0x01 == 0 {
+                    b.put_u32(*address_v4)?;
+                } else {
+                    if let Some(address) = address_v6 {
+                        b.put_u128(*address)?;
+                    }
+                }
+
+                b.put_u16(*port)?;
             },
 
-            Frame::AddressResponse { address } => {
-                b.put_varint(0x20)?;
-
-                b.put_bytes(address.as_ref())?;
-            },
         }
 
         Ok(before - b.cap())
@@ -839,15 +860,23 @@ impl Frame {
                 *length // data
             },
 
-            Frame::AddressRequest { address } => {
+            Frame::ObservedAddress {
+                frame_type,
+                sequence_number,
+                address_v4,
+                address_v6,
+                port,
+            } => {
                 1 + // frame type
-                address.len() // address
+                octets::varint_len(*sequence_number) + // sequence_number
+                if *frame_type & 0x01 == 0 {    // if the least significant bit of the frame type is 0, then it's a v4 address
+                    4 // address_v4
+                } else {
+                    16 // address_v6
+                } +
+                2 // port
             },
 
-            Frame::AddressResponse { address } => {
-                1 + // frame type
-                address.len() // address
-            },
         }
     }
 
@@ -1074,13 +1103,20 @@ impl Frame {
                 raw: None,
             },
 
-            Frame::AddressRequest { address } => QuicFrame::AddressRequest {
-                address: qlog::HexSlice::maybe_string(Some(address)),   // TODO: pick the address type some how
+            Frame::ObservedAddress {
+                frame_type,
+                sequence_number,
+                address_v4,
+                address_v6,
+                port,
+            } => QuicFrame::ObservedAddress {
+                frame_type: *frame_type as u32,
+                sequence_number: *sequence_number as u32,
+                address_v4: Some(*address_v4),
+                address_v6: *address_v6,
+                port: *port as u32,
             },
 
-            Frame::AddressResponse { address } => QuicFrame::AddressResponse {
-                address: qlog::HexSlice::maybe_string(Some(address)),   // TODO: pick the address type some how
-            },
         }
     }
 }
@@ -1249,15 +1285,20 @@ impl std::fmt::Debug for Frame {
                 write!(f, "DATAGRAM len={length}")?;
             },
 
-            Frame::AddressRequest { address } => {
-                // Format the address as hex.
-                write!(f, "ADDRESS_REQUEST address={address:02x?}")?;
+            Frame::ObservedAddress {
+                frame_type,
+                sequence_number,
+                address_v4,
+                address_v6,
+                port,
+            } => {
+                write!(
+                    f,
+                    "OBSERVED_ADDRESS type={frame_type:x} seq_num={sequence_number} addr_v4={address_v4} addr_v6={address_v6:?} port={port}"
+                )?;
             },
 
-            Frame::AddressResponse { address } => {
-                // Format the address as hex.
-                write!(f, "ADDRESS_RESPONSE address={address:02x?}")?;
-            },
+
         }
 
         Ok(())
