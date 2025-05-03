@@ -1284,11 +1284,6 @@ pub struct TransportParams {
     active_conn_id_limit: u64,
     max_datagram_frame_size: ssize_t,
 
-    address_discovery: Option<u64>,
-    // 0 if the node wants to provide its own address but not receive address observations
-    // 1 if the node wants to receive address observations but not provide its own address
-    // 2 if the node wants to provide its own address and receive address observations 
-
 }
 
 #[no_mangle]
