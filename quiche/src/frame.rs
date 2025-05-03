@@ -33,6 +33,8 @@ use crate::packet;
 use crate::ranges;
 use crate::stream;
 
+#[allow(unused_variables)]
+
 #[cfg(feature = "qlog")]
 use qlog::events::quic::AckedRanges;
 #[cfg(feature = "qlog")]
@@ -189,26 +191,27 @@ pub enum Frame {
     // The following frames are not part of the QUIC spec, but are used by
     // quiche to implement the QUIC transport protocol.
 
-    // Introducing new frame type OBSERVED_ADDRESS 
+    // Introducing new frame types REQUEST_ADDRESS & OBSERVED_ADDRESS
     // This frame is used to inform the peer about the address it is using to
 
+    RequestAddress,
+        // Sent by a node to a peer to request the address it is using to send packets.
+        // "What address and port do you see me using?" kind of thing.
+        // This is used when the node suspects a change in the address it is using to send packets.
+
     ObservedAddress {
-        // This is the address of the peer that we are using to send packets to.
+        // Sent by a node to inform its peer about the address it is using to send packets.
 
-        // - address_type: the type of the address.  The least significant bit is used to determine whether the address is IPv4 or IPv6.
-        // - sequence_number: a unique number for each frame.
-        // - adress_v4: The IPv4 address.  Only present if the least significant bit of the frame type is 0.
-        // - adress_v6: The IPv6 address.  Only present if the least significant bit of the frame type is 1. The address is 16 bytes long, represented as 4 32-bit integers.
-        // - port: the port of the peer.
-
-
+        /// The address type is 0 for IPv4 and 1 for IPv6.
+        /// The address is 16 bytes long, represented as 4 32-bit integers.
+        /// If the address is IPv4, we use the first 4 bytes. Else, we use the first 16 bytes.
+        /// The port is 2 bytes long.
         address_type: u8,
         sequence_number: u64,
         address_v4: Option<u32>,
         address_v6: Option<[u32; 4]>,
         port: u16,
     },
-
 
 }
 
@@ -355,37 +358,18 @@ impl Frame {
 
             0x1e => Frame::HandshakeDone,
 
-            // We attribute the value 0x28 to the OBSERVED_ADDRESS frame type.
+            // We attribute the value 0x28 to the REQUEST_ADDRESS frame type.
+            0x28 => Frame::RequestAddress,
 
-            0x28 => {
-                let address_type = b.get_u8()?;
-                let sequence_number = b.get_varint()?;
-                let port = b.get_u16()?;
 
-                let address_v4 = if address_type & 0x01 == 0 {
-                    Some(b.get_u32()?)
-                } else {
-                    None
-                };
-                let address_v6 = if address_type & 0x01 == 1 {
-                    // Read the IPv6 address as 8 16-bit integers
-                    let mut address_v6 = [0u32; 4];
-                    for i in 0..4 {
-                        address_v6[i] = b.get_u32()?;
-                    }
-                    Some(address_v6)
-                } else {
-                    None
-                };
-
-                Frame::ObservedAddress {
-                    address_type,
-                    sequence_number,
-                    address_v4,
-                    address_v6,
-                    port,
-                }
-        },
+            // We attribute the value 0x29 to the OBSERVED_ADDRESS frame type.
+            0x29 => Frame::ObservedAddress {
+                address_type: b.get_u8()?,
+                sequence_number: b.get_varint()?,
+                address_v4: None,
+                address_v6: None,
+                port: b.get_u16()?,
+            },
             
 
             0x30 | 0x31 => parse_datagram_frame(frame_type, b)?,
@@ -653,6 +637,10 @@ impl Frame {
 
             Frame::DatagramHeader { .. } => (),
 
+            Frame::RequestAddress => {
+                b.put_varint(0x28)?;
+            },
+
             Frame::ObservedAddress {
                 address_type,
                 sequence_number,
@@ -687,6 +675,7 @@ impl Frame {
         Ok(before - b.cap())
     }
 
+    
     pub fn wire_len(&self) -> usize {
         match self {
             Frame::Padding { len } => *len,
@@ -896,6 +885,10 @@ impl Frame {
                 1 + // frame type
                 2 + // length, always encode as 2-byte varint
                 *length // data
+            },
+
+            Frame::RequestAddress => {
+                1 // frame type
             },
 
             Frame::ObservedAddress {
@@ -1142,6 +1135,8 @@ impl Frame {
                 raw: None,
             },
 
+            Frame::RequestAddress => QuicFrame::RequestAddress,
+
             Frame::ObservedAddress {
                 address_type,
                 sequence_number,
@@ -1322,6 +1317,10 @@ impl std::fmt::Debug for Frame {
 
             Frame::DatagramHeader { length } => {
                 write!(f, "DATAGRAM len={length}")?;
+            },
+
+            Frame::RequestAddress => {
+                write!(f, "REQUEST_ADDRESS")?;
             },
 
             Frame::ObservedAddress {

@@ -508,6 +508,8 @@ pub enum QuicFrame {
         raw: Option<Bytes>,
     },
 
+    RequestAddress,
+
     ObservedAddress {
         address_type: u8,
         sequence_number: u32,
