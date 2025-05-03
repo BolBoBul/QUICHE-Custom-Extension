@@ -7466,20 +7466,12 @@ impl Connection {
 
             frame::Frame::DatagramHeader { .. } => unreachable!(),
 
-            frame::Frame::ObservedAddress { 
-                frame_type,
-                sequence_number, 
-                address_v4, 
-                address_v6, 
-                port }
-            => {
+            frame::Frame::ObservedAddress { address_type, sequence_number, address_v4, address_v6, port } => {
                 if self.is_server {
                     return Err(Error::InvalidPacket);
                 }
 
-                self.paths
-                    .get_mut(recv_path_id)?
-                    .on_observed_address_received(frame_type, sequence_number, adress_v4, adress_v6, port);
+                //TODO: implement this
             },
 
         }
