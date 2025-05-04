@@ -576,6 +576,9 @@ pub enum Error {
 
     /// The peer sent more data in CRYPTO frames than we can buffer.
     CryptoBufferExceeded,
+
+    /// Address not provided.
+    AddressRequired,
 }
 
 /// QUIC error codes sent on the wire.
@@ -7466,7 +7469,11 @@ impl Connection {
 
             frame::Frame::DatagramHeader { .. } => unreachable!(),
 
-            frame::Frame::ObservedAddress { address_type, sequence_number, address_v4, address_v6, port } => {
+            frame::Frame::RequestAddress { .. } => {
+                //TODO: implement this
+            },
+
+            frame::Frame::ObservedAddress { address_type, sequence_number, address_4, address_6, port } => {
                 if self.is_server {
                     return Err(Error::InvalidPacket);
                 }

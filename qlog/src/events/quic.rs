@@ -24,6 +24,8 @@
 // NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+use std::vec;
+
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -513,8 +515,8 @@ pub enum QuicFrame {
     ObservedAddress {
         address_type: u8,
         sequence_number: u32,
-        address_v4: Option<u32>,
-        address_v6: Option<[u32; 4]>,
+        address_4: [u8; 4],
+        address_6: [u16; 8],
         port: u32,
 
     },

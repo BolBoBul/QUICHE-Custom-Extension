@@ -25,6 +25,7 @@
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 use std::convert::TryInto;
+use std::mem::size_of;
 
 use crate::Error;
 use crate::Result;
@@ -49,6 +50,11 @@ pub const MAX_DGRAM_OVERHEAD: usize = 2;
 pub const MAX_STREAM_OVERHEAD: usize = 12;
 pub const MAX_STREAM_SIZE: u64 = 1 << 62;
 pub const OBSERVED_ADDRESS_TYPE: std::ops::Range<i32> = 0x9f81a16..0x9f81a17;
+
+pub enum Address {
+    V4([u8; 4]),
+    V6([u16; 8]),
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EcnCounts {
@@ -203,13 +209,11 @@ pub enum Frame {
         // Sent by a node to inform its peer about the address it is using to send packets.
 
         /// The address type is 0 for IPv4 and 1 for IPv6.
-        /// The address is 16 bytes long, represented as 4 32-bit integers.
-        /// If the address is IPv4, we use the first 4 bytes. Else, we use the first 16 bytes.
         /// The port is 2 bytes long.
         address_type: u8,
         sequence_number: u64,
-        address_v4: Option<u32>,
-        address_v6: Option<[u32; 4]>,
+        address_4: Option<[u8; 4]>,
+        address_6: Option<[u16; 8]>,
         port: u16,
     },
 
@@ -363,13 +367,41 @@ impl Frame {
 
 
             // We attribute the value 0x29 to the OBSERVED_ADDRESS frame type.
-            0x29 => Frame::ObservedAddress {
-                address_type: b.get_u8()?,
-                sequence_number: b.get_varint()?,
-                address_v4: None,
-                address_v6: None,
-                port: b.get_u16()?,
-            },
+            0x29 => {
+                let address_type = b.get_u8()?; // Read it once
+            
+                Frame::ObservedAddress {
+                    address_type,
+                    sequence_number: b.get_varint()?,
+                    port: b.get_u16()?,
+                    
+                    address_4: if address_type & 0x01 == 0 {
+                        Some([
+                            b.get_u8()?,
+                            b.get_u8()?,
+                            b.get_u8()?,
+                            b.get_u8()?,
+                        ])
+                    } else {
+                        None
+                    },
+                    address_6: if address_type & 0x01 == 1 {
+                        Some([
+                            b.get_u16()?,
+                            b.get_u16()?,
+                            b.get_u16()?,
+                            b.get_u16()?,
+                            b.get_u16()?,
+                            b.get_u16()?,
+                            b.get_u16()?,
+                            b.get_u16()?,
+                        ])
+                    } else {
+                        None
+                    },
+                }
+            }
+            
             
 
             0x30 | 0x31 => parse_datagram_frame(frame_type, b)?,
@@ -644,30 +676,35 @@ impl Frame {
             Frame::ObservedAddress {
                 address_type,
                 sequence_number,
-                address_v4,
-                address_v6,
+                address_4,
+                address_6,
                 port,
             } => {
-                b.put_varint(0x28)?;
+                b.put_varint(0x29)?;
                 b.put_u8(*address_type)?;
                 b.put_varint(*sequence_number)?;
                 b.put_u16(*port)?;
 
                 if *address_type & 0x01 == 0 {
-                    // if the least significant bit of the frame type is 0, then it's a v4 address
-                    if let Some(address_v4) = address_v4 {
-                        b.put_u32(*address_v4)?;
+                    if let Some(addr) = address_4 {
+                        println!("address type is 0 (IPv4)");
+                        b.put_bytes(addr)?;
                     } else {
-                        return Err(Error::InvalidFrame);
+                        return Err(Error::AddressRequired);
                     }
-                } else 
-                    if let Some(address_v6) = address_v6 {
-                        for address in address_v6 {
-                            b.put_u32(*address)?;
+                } else {
+                    // We have an IPv6 address
+                    if let Some(addr) = address_6 {
+                        println!("address type is 1 (IPv6)");
+                        for segment in addr {
+                            b.put_u16(*segment)?;
                         }
                     } else {
-                        return Err(Error::InvalidFrame);
+                        return Err(Error::AddressRequired);
+                    }
                 }
+                println!("address_4: {:?}", address_4);
+                println!("address_6: {:?}", address_6);
             }
 
         }
@@ -894,18 +931,19 @@ impl Frame {
             Frame::ObservedAddress {
                 address_type,
                 sequence_number,
-                address_v4,
-                address_v6,
+                address_4,
+                address_6,
                 port,
             } => {
-                1 + // address type
+                1 + // address_type
                 octets::varint_len(*sequence_number) + // sequence_number
                 octets::varint_len(*port as u64) + // port
                 if *address_type & 0x01 == 0 {
                     // if the least significant bit of the frame type is 0, then it's a v4 address
-                    4 // address_v4
+                    4 // address_4
                 } else {
-                    16 // address_v6
+                    // else it's a v6 address and we need to put
+                    16 // address_6
                 }
             }
 
@@ -1140,15 +1178,16 @@ impl Frame {
             Frame::ObservedAddress {
                 address_type,
                 sequence_number,
-                address_v4,
-                address_v6,
+                address_4,
+                address_6,
                 port,
             } => QuicFrame::ObservedAddress {
                 address_type: *address_type,
                 sequence_number: *sequence_number as u32,
-                address_v4: *address_v4,
-                address_v6: *address_v6,
                 port: *port as u32,
+                address_4: [1,2,3,4],
+                address_6: [1,2,3,4,5,6,7,8],
+                //TODO
             },
 
         }
@@ -1326,18 +1365,14 @@ impl std::fmt::Debug for Frame {
             Frame::ObservedAddress {
                 address_type,
                 sequence_number,
-                address_v4,
-                address_v6,
+                address_4,
+                address_6,
                 port,
             } => {
-                write!(f, "OBSERVED_ADDRESS type={address_type} seq_num={sequence_number} port={port}")?;
-                if let Some(address_v4) = address_v4 {
-                    write!(f, " address_v4={address_v4:02x?}")?;
-                }
-                if let Some(address_v6) = address_v6 {
-                    write!(f, " address_v6={address_v6:02x?}")?;
-                }
-                write!(f, " address_v4={address_v4:02x?} address_v6={address_v6:02x?}")?;
+                write!(
+                    f,
+                    "OBSERVED_ADDRESS address_type={address_type} sequence_number={sequence_number} port={port} address_4={address_4:?} address_6={address_6:?}"
+                )?;
             },
 
 
@@ -2266,9 +2301,8 @@ mod tests {
         let frame = Frame::ObservedAddress {
             address_type: 0x01,
             sequence_number: 42,
-            address_v4: None,
-            // Use a dummy v6 address for testing
-            address_v6: Some([0; 4]),
+            address_4: Some([192, 168, 1, 1]),
+            address_6: Some([0, 0, 0, 0, 0, 0, 0, 1]),
             port: 80,
 
         };
@@ -2282,4 +2316,5 @@ mod tests {
 
         assert_eq!(format!("{:?}", frame), format!("{:?}", parsed_frame));
     }
+
 }
