@@ -2301,7 +2301,7 @@ mod tests {
         let frame = Frame::ObservedAddress {
             address_type: 0x01,
             sequence_number: 42,
-            address_4: Some([192, 168, 1, 1]),
+            address_4: None,
             address_6: Some([0, 0, 0, 0, 0, 0, 0, 1]),
             port: 80,
 
