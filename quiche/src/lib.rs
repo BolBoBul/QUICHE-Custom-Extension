@@ -579,6 +579,9 @@ pub enum Error {
 
     /// Address not provided.
     AddressRequired,
+
+    /// Address discovery mode incorrect.
+    AddressDiscoveryModeIncorrect,
 }
 
 /// QUIC error codes sent on the wire.
@@ -8227,6 +8230,13 @@ pub struct TransportParams {
     /// Unknown peer transport parameters and values, if any.
     pub unknown_params: Option<UnknownTransportParameters>,
     // pub preferred_address: ...,
+
+    /// The address discovery mode. Can be one of:
+    /// - 0: The node sending the packet is willing to send its address to the
+    ///   peer, but not to receive address observations.
+    /// - 1: The node sending the packet is willing to receive address observations from the peer, but not to send its address.
+    /// - 2: The node sending the packet is willing to send its address to the peer and to receive address observations.
+    pub address_discovery: Option<u8>,
 }
 
 impl Default for TransportParams {
@@ -8250,6 +8260,7 @@ impl Default for TransportParams {
             retry_source_connection_id: None,
             max_datagram_frame_size: None,
             unknown_params: Default::default(),
+            address_discovery: None,
         }
     }
 }
@@ -9188,6 +9199,7 @@ mod tests {
             retry_source_connection_id: Some(b"retry".to_vec().into()),
             max_datagram_frame_size: Some(32),
             unknown_params: Default::default(),
+            address_discovery: Some(1),
         };
 
         let mut raw_params = [42; 256];
@@ -9219,6 +9231,7 @@ mod tests {
             retry_source_connection_id: None,
             max_datagram_frame_size: Some(32),
             unknown_params: Default::default(),
+            address_discovery: Some(1),
         };
 
         let mut raw_params = [42; 256];
