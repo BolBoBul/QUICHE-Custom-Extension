@@ -523,7 +523,7 @@ pub enum QuicFrame {
     OBSERVED_ADDRESS {
         address_type: u8,
         sequence_number: u32,
-        address: IpAddress,
+        address: std::net::IpAddr,
         port: u32,
 
     },
