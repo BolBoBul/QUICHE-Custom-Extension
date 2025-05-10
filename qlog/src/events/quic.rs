@@ -24,7 +24,9 @@
 // NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-use std::vec;
+
+use std::net::Ipv4Addr;
+use std::net::Ipv6Addr;
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -63,6 +65,12 @@ pub enum PacketNumberSpace {
     Initial,
     Handshake,
     ApplicationData,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub enum IpAddress {
+    V4(Ipv4Addr),
+    V6(Ipv6Addr),
 }
 
 #[serde_with::skip_serializing_none]
@@ -512,11 +520,10 @@ pub enum QuicFrame {
 
     RequestAddress,
 
-    ObservedAddress {
+    OBSERVED_ADDRESS {
         address_type: u8,
         sequence_number: u32,
-        address_4: [u8; 4],
-        address_6: [u16; 8],
+        address: IpAddress,
         port: u32,
 
     },
