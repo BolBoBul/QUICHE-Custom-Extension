@@ -129,6 +129,10 @@ fn main() {
 
     config.enable_pacing(pacing);
 
+    config.set_address_discovery(1);    // The server doesn't need to discover its address.
+
+    trace!("Server AD mode: {:?}", config.get_address_discovery());
+
     let mut keylog = None;
 
     if let Some(keylog_path) = std::env::var_os("SSLKEYLOGFILE") {

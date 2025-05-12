@@ -50,7 +50,6 @@ pub const MAX_CRYPTO_OVERHEAD: usize = 8;
 pub const MAX_DGRAM_OVERHEAD: usize = 2;
 pub const MAX_STREAM_OVERHEAD: usize = 12;
 pub const MAX_STREAM_SIZE: u64 = 1 << 62;
-pub const OBSERVED_ADDRESS_TYPE: std::ops::Range<i32> = 0x9f81a16..0x9f81a17;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EcnCounts {
@@ -197,19 +196,17 @@ pub enum Frame {
         length: usize,
     },
 
-    // The following frames are not part of the QUIC spec, but are used by
-    // quiche to implement the QUIC transport protocol.
-
-    // Introducing new frame types REQUEST_ADDRESS & OBSERVED_ADDRESS
-    // This frame is used to inform the peer about the address it is using to
-
-    RequestAddress,
-        // Sent by a node to a peer to request the address it is using to send packets.
-        // "What address and port do you see me using?" kind of thing.
-        // This is used when the node suspects a change in the address it is using to send packets.
-
     OBSERVED_ADDRESS {
-        // Sent by a node to inform its peer about the address it is using to send packets.
+        // Sent by a node to inform its peer about the address it is using to send packets as described in https://datatracker.ietf.org/doc/draft-ietf-quic-address-discovery/00/
+
+        /// 3 possible values:
+        //  - 0 : I'll tell yours but you don't tell mine
+        //  - 1 : I won't tell yours but you tell mine
+        //  - 2 : I'll tell yours and you tell mine
+
+        /// 0: Receive only
+        /// 1: Send only
+        /// 2: Send and receive
 
         /// If the least significant bit of the address type is 0, then it's a v4 address. Else it's a v6 address.
         /// The port is 2 bytes long.
@@ -363,9 +360,6 @@ impl Frame {
             },
 
             0x1e => Frame::HandshakeDone,
-
-            // We attribute the value 0x28 to the REQUEST_ADDRESS frame type.
-            0x28 => Frame::RequestAddress,
 
 
             // We attribute the value 0x29 to the OBSERVED_ADDRESS frame type.
@@ -669,10 +663,6 @@ impl Frame {
 
             Frame::DatagramHeader { .. } => (),
 
-            Frame::RequestAddress => {
-                b.put_varint(0x28)?;
-            },
-
             Frame::OBSERVED_ADDRESS {
                 address_type,
                 sequence_number,
@@ -913,17 +903,13 @@ impl Frame {
                 *length // data
             },
 
-            Frame::RequestAddress => {
-                1 // frame type
-            },
-
             Frame::OBSERVED_ADDRESS {
                 address_type,
                 sequence_number,
                 address,
                 port,
             } => {
-                1 + // frame type
+                octets::varint_parse_len(*address_type) + // address type
                 octets::varint_len(*sequence_number) + // sequence_number
                 1 + // address type
                 size_of_val(&port) + // port
@@ -1166,8 +1152,6 @@ impl Frame {
                 raw: None,
             },
 
-            Frame::RequestAddress => QuicFrame::RequestAddress,
-
             Frame::OBSERVED_ADDRESS {
                 address_type,
                 sequence_number,
@@ -1349,10 +1333,6 @@ impl std::fmt::Debug for Frame {
 
             Frame::DatagramHeader { length } => {
                 write!(f, "DATAGRAM len={length}")?;
-            },
-
-            Frame::RequestAddress => {
-                write!(f, "REQUEST_ADDRESS")?;
             },
 
             Frame::OBSERVED_ADDRESS {

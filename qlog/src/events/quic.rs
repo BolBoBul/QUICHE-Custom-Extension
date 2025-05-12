@@ -518,8 +518,6 @@ pub enum QuicFrame {
         raw: Option<Bytes>,
     },
 
-    RequestAddress,
-
     OBSERVED_ADDRESS {
         address_type: u8,
         sequence_number: u32,
@@ -595,8 +593,6 @@ pub struct TransportParametersSet {
     pub preferred_address: Option<PreferredAddress>,
 
     pub unknown_parameters: Vec<UnknownTransportParameter>,
-
-    pub address_discovery: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]

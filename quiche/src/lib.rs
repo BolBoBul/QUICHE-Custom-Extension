@@ -432,6 +432,9 @@ pub const MAX_CONN_ID_LEN: usize = crate::packet::MAX_CID_LEN as usize;
 /// The minimum length of Initial packets sent by a client.
 pub const MIN_CLIENT_INITIAL_LEN: usize = 1200;
 
+/// Address discovery transport parameter
+pub const TP_ADDRESS_DISCOVERY: u64 = 0x9f81a176;
+
 #[cfg(not(feature = "fuzzing"))]
 const PAYLOAD_MIN_LEN: usize = 4;
 
@@ -577,11 +580,11 @@ pub enum Error {
     /// The peer sent more data in CRYPTO frames than we can buffer.
     CryptoBufferExceeded,
 
-    /// Address not provided.
-    AddressRequired,
-
     /// Address discovery mode incorrect.
     AddressDiscoveryModeIncorrect,
+
+    /// Protocol violation.
+    ProtocolViolation,
 }
 
 /// QUIC error codes sent on the wire.
@@ -822,6 +825,8 @@ pub struct Config {
     disable_dcid_reuse: bool,
 
     track_unknown_transport_params: Option<usize>,
+
+    address_discovery: Option<u8>,
 }
 
 // See https://quicwg.org/base-drafts/rfc9000.html#section-15
@@ -892,6 +897,8 @@ impl Config {
             disable_dcid_reuse: false,
 
             track_unknown_transport_params: None,
+
+            address_discovery: None,
         })
     }
 
@@ -1373,6 +1380,14 @@ impl Config {
     pub fn enable_track_unknown_transport_parameters(&mut self, size: usize) {
         self.track_unknown_transport_params = Some(size);
     }
+
+    pub fn set_address_discovery(&mut self, mode: u8) {
+        self.address_discovery = Some(mode)
+    }
+
+    pub fn get_address_discovery(&mut self) -> Option<u8> {
+        return self.address_discovery;
+    }
 }
 
 /// A QUIC connection.
@@ -1848,6 +1863,7 @@ impl Default for QlogInfo {
 }
 
 impl Connection {
+
     fn new(
         scid: &ConnectionId, odcid: Option<&ConnectionId>, local: SocketAddr,
         peer: SocketAddr, config: &mut Config, is_server: bool,
@@ -4379,6 +4395,12 @@ impl Connection {
                 }
             }
         }
+
+        // Create a single OBSERVED_ADDRESS frame
+        if (pkt_type == packet::Type::Short || pkt_type == packet::Type::ZeroRTT) && !is_closing && path.active() {
+            
+        }
+
 
         // Create a single STREAM frame for the first stream that is flushable.
         if (pkt_type == packet::Type::Short || pkt_type == packet::Type::ZeroRTT) &&
@@ -7471,18 +7493,24 @@ impl Connection {
             },
 
             frame::Frame::DatagramHeader { .. } => unreachable!(),
+            
+            frame::Frame::OBSERVED_ADDRESS { .. } => {
+                let self_ad_mode = self.local_transport_params.address_discovery;
 
-            frame::Frame::RequestAddress { .. } => {
-                //TODO: implement this
-            },
+                match self_ad_mode {
 
-            frame::Frame::ObservedAddress { address_type, sequence_number, address_4, address_6, port } => {
-                if self.is_server {
-                    return Err(Error::InvalidPacket);
+                    0 | 2 => {
+                        // 0: Receive only
+                        // 2: Send and receive
+
+                        todo!();
+                    },
+                    _ => {
+                        return Err(Error::ProtocolViolation);
+                    }
                 }
 
-                //TODO: implement this
-            },
+            }
 
         }
 
@@ -8236,7 +8264,7 @@ pub struct TransportParams {
     ///   peer, but not to receive address observations.
     /// - 1: The node sending the packet is willing to receive address observations from the peer, but not to send its address.
     /// - 2: The node sending the packet is willing to send its address to the peer and to receive address observations.
-    pub address_discovery: Option<u8>,
+    pub address_discovery: u8,
 }
 
 impl Default for TransportParams {
@@ -8260,7 +8288,7 @@ impl Default for TransportParams {
             retry_source_connection_id: None,
             max_datagram_frame_size: None,
             unknown_params: Default::default(),
-            address_discovery: None,
+            address_discovery: 0,
         }
     }
 }
@@ -9199,7 +9227,7 @@ mod tests {
             retry_source_connection_id: Some(b"retry".to_vec().into()),
             max_datagram_frame_size: Some(32),
             unknown_params: Default::default(),
-            address_discovery: Some(1),
+            address_discovery: 1,
         };
 
         let mut raw_params = [42; 256];
@@ -9231,7 +9259,7 @@ mod tests {
             retry_source_connection_id: None,
             max_datagram_frame_size: Some(32),
             unknown_params: Default::default(),
-            address_discovery: Some(1),
+            address_discovery: 1,
         };
 
         let mut raw_params = [42; 256];

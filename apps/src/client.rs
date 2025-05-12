@@ -48,6 +48,8 @@ pub fn connect(
     args: ClientArgs, conn_args: CommonArgs,
     output_sink: impl FnMut(String) + 'static,
 ) -> Result<(), ClientError> {
+    println!("AAAAAA: connecting to {:?}", args.urls);
+    println!("BBBBB: using QUIC version {:?}", args.version);
     let mut buf = [0; 65535];
     let mut out = [0; MAX_DATAGRAM_SIZE];
 
@@ -128,6 +130,7 @@ pub fn connect(
 
     config.set_max_connection_window(conn_args.max_window);
     config.set_max_stream_window(conn_args.max_stream_window);
+    config.set_address_discovery(0);
 
     let mut keylog = None;
 
@@ -252,6 +255,9 @@ pub fn connect(
     let mut scid_sent = false;
     let mut new_path_probed = false;
     let mut migrated = false;
+    let ad_mode = config.get_address_discovery();
+
+    info!("Address Discovery mode: {:?}",ad_mode);
 
     loop {
         if !conn.is_in_early_data() || app_proto_selected {
@@ -337,6 +343,7 @@ pub fn connect(
                 conn.stats(),
                 conn.path_stats().collect::<Vec<quiche::PathStats>>()
             );
+            print!("{}: connection closed", local_addr);
 
             if !conn.is_established() {
                 error!(

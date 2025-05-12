@@ -1283,7 +1283,7 @@ pub struct TransportParams {
     disable_active_migration: bool,
     active_conn_id_limit: u64,
     max_datagram_frame_size: ssize_t,
-
+    address_discovery: u8,
 }
 
 #[no_mangle]
