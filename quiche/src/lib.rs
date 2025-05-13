@@ -7499,7 +7499,7 @@ impl Connection {
 
                 match self_ad_mode {
 
-                    0 | 2 => {
+                    Some(0) | Some(2) => {
                         // 0: Receive only
                         // 2: Send and receive
 
@@ -8264,7 +8264,7 @@ pub struct TransportParams {
     ///   peer, but not to receive address observations.
     /// - 1: The node sending the packet is willing to receive address observations from the peer, but not to send its address.
     /// - 2: The node sending the packet is willing to send its address to the peer and to receive address observations.
-    pub address_discovery: u8,
+    pub address_discovery: Option<u8>,
 }
 
 impl Default for TransportParams {
@@ -8288,7 +8288,7 @@ impl Default for TransportParams {
             retry_source_connection_id: None,
             max_datagram_frame_size: None,
             unknown_params: Default::default(),
-            address_discovery: 0,
+            address_discovery: Some(0),
         }
     }
 }
@@ -9248,7 +9248,7 @@ mod tests {
             retry_source_connection_id: Some(b"retry".to_vec().into()),
             max_datagram_frame_size: Some(32),
             unknown_params: Default::default(),
-            address_discovery: 1,
+            address_discovery: Some(1),
         };
 
         let mut raw_params = [42; 256];
@@ -9280,7 +9280,7 @@ mod tests {
             retry_source_connection_id: None,
             max_datagram_frame_size: Some(32),
             unknown_params: Default::default(),
-            address_discovery: 1,
+            address_discovery: Some(1),
         };
 
         let mut raw_params = [42; 256];
