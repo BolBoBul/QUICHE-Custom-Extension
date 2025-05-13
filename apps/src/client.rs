@@ -130,7 +130,6 @@ pub fn connect(
 
     config.set_max_connection_window(conn_args.max_window);
     config.set_max_stream_window(conn_args.max_stream_window);
-    config.set_address_discovery(0);
 
     let mut keylog = None;
 
@@ -255,10 +254,7 @@ pub fn connect(
     let mut scid_sent = false;
     let mut new_path_probed = false;
     let mut migrated = false;
-    let ad_mode = config.get_address_discovery();
-
-    info!("Address Discovery mode: {:?}",ad_mode);
-
+    
     loop {
         if !conn.is_in_early_data() || app_proto_selected {
             poll.poll(&mut events, conn.timeout()).unwrap();

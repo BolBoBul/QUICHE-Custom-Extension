@@ -580,9 +580,6 @@ pub enum Error {
     /// The peer sent more data in CRYPTO frames than we can buffer.
     CryptoBufferExceeded,
 
-    /// Address discovery mode incorrect.
-    AddressDiscoveryModeIncorrect,
-
     /// Protocol violation.
     ProtocolViolation,
 }
@@ -825,8 +822,6 @@ pub struct Config {
     disable_dcid_reuse: bool,
 
     track_unknown_transport_params: Option<usize>,
-
-    address_discovery: Option<u8>,
 }
 
 // See https://quicwg.org/base-drafts/rfc9000.html#section-15
@@ -897,8 +892,6 @@ impl Config {
             disable_dcid_reuse: false,
 
             track_unknown_transport_params: None,
-
-            address_discovery: None,
         })
     }
 
@@ -1379,14 +1372,6 @@ impl Config {
     /// The default is that the feature is disabled.
     pub fn enable_track_unknown_transport_parameters(&mut self, size: usize) {
         self.track_unknown_transport_params = Some(size);
-    }
-
-    pub fn set_address_discovery(&mut self, mode: u8) {
-        self.address_discovery = Some(mode)
-    }
-
-    pub fn get_address_discovery(&mut self) -> Option<u8> {
-        return self.address_discovery;
     }
 }
 
