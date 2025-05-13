@@ -8447,6 +8447,18 @@ impl TransportParams {
                 0x0020 => {
                     tp.max_datagram_frame_size = Some(val.get_varint()?);
                 },
+                
+                // Handles the address discovery transport parameter.
+                // If the value is not 0, 1 or 2, it is an error.
+                // observations from the peer, but not to send its address.
+                // See https://datatracker.ietf.org/doc/draft-ietf-quic-address-discovery/00/
+                0x0030 => {
+                    let discovery_mode = val.get_varint()?;
+                    if discovery_mode > 2 {
+                        return Err(Error::InvalidTransportParam);
+                    }
+                    tp.address_discovery = Some(discovery_mode as u8);
+                },
 
                 // Track unknown transport parameters specially.
                 unknown_tp_id => {
@@ -8617,6 +8629,15 @@ impl TransportParams {
                 octets::varint_len(max_datagram_frame_size),
             )?;
             b.put_varint(max_datagram_frame_size)?;
+        }
+
+        if let Some(address_discovery_mode) = tp.address_discovery {
+            TransportParams::encode_param(
+                &mut b,
+                0x0030,
+                octets::varint_len(address_discovery_mode as u64),
+            )?;
+            b.put_varint(address_discovery_mode as u64)?;
         }
 
         let out_len = b.off();
