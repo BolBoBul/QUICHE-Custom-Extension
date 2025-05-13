@@ -8273,7 +8273,10 @@ impl Default for TransportParams {
             retry_source_connection_id: None,
             max_datagram_frame_size: None,
             unknown_params: Default::default(),
-            address_discovery: Some(0),
+            // By default, the address discovery mode is set to 1, which means
+            // that the node is willing to send OBSERVED_ADDRESS frames.
+            // We do this to prevent flooding the connection with OBSERVED_ADDRESS frames.
+            address_discovery: None,
         }
     }
 }
