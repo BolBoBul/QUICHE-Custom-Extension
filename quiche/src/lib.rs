@@ -407,6 +407,7 @@ use stream::StreamPriorityKey;
 
 use std::cmp;
 use std::convert::TryInto;
+use std::net::IpAddr;
 use std::time;
 
 use std::sync::Arc;
@@ -4386,22 +4387,34 @@ impl Connection {
             // Checking if the peer node asked to receive our address
             if let Some(peer_ad_mode) = self.peer_transport_params.address_discovery {
                 if (peer_ad_mode == 1 || peer_ad_mode == 2) && !path.observed_address_sent {
+                    println!("The peer node asked to receive our address");
                     // Check if we are okay to send out address
                     if let Some(self_addr_mode) = self.local_transport_params.address_discovery {
                         if self_addr_mode == 0 || self_addr_mode == 2 {
+                            println!("We are okay to send our address");
                             // Determine the type of address (v4 or v6).
                             let addr = path.local_addr();
-                            let addr_type = None;
+                            let (addr_type, address) = if addr.is_ipv4() {
+                                (0, addr.ip())
+                            } else if addr.is_ipv6() {
+                                (1, addr.ip())
+                            } else {
+                                return Err(Error::InvalidState);
+                            };
                             
-                        };
-                            
+                            let frame = frame::Frame::OBSERVED_ADDRESS {
+                                address_type: addr_type,
+                                address: address,
+                                port: addr.port(),
+                                sequence_number: 0,
+                            };
 
                             if push_frame_to_pkt!(b, frames, frame, left) {
                                 path.observed_address_sent = true;
-
                                 ack_eliciting = true;
                                 in_flight = true;
-                            };
+                            }
+                        }
                     }
                 }
             }
@@ -7500,7 +7513,7 @@ impl Connection {
 
             frame::Frame::DatagramHeader { .. } => unreachable!(),
             
-            frame::Frame::OBSERVED_ADDRESS { .. } => {
+            frame::Frame::OBSERVED_ADDRESS { address_type, address, port, .. } => {
                 let self_ad_mode = self.local_transport_params.address_discovery;
 
                 match self_ad_mode {
@@ -7508,8 +7521,10 @@ impl Connection {
                     Some(0) | Some(2) => {
                         // 0: Receive only
                         // 2: Send and receive
-
-                        todo!();
+                        
+                        // We extract the address and the port from the frame and store it in the path.
+                        let path = self.paths.get_mut(recv_path_id)?;
+                        path.observed_peer_address = Some ((address, port));
                     },
                     _ => {
                         return Err(Error::ProtocolViolation);

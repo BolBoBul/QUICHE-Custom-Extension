@@ -2254,7 +2254,7 @@ mod tests {
         let frame = Frame::OBSERVED_ADDRESS {
             address_type: 0x00,
             sequence_number: 42,
-            address:IpAddress::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            address: std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 1)),
             port: 80,
 
         };
