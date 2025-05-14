@@ -58,12 +58,6 @@ pub struct EcnCounts {
     ecn_ce_count: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum IpAddress {
-    V4(Ipv4Addr),
-    V6(Ipv6Addr),
-}
-
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum Frame {
@@ -212,7 +206,7 @@ pub enum Frame {
         /// The port is 2 bytes long.
         address_type: u8,
         sequence_number: u64,
-        address: IpAddress,
+        address: std::net::IpAddr,
         port: u16,
     },
 
@@ -370,27 +364,19 @@ impl Frame {
                     address_type,
                     sequence_number: b.get_varint()?,
                     address: if address_type & 0x01 == 0 {
-                        // if the least significant bit of the frame type is 0, then it's a v4 address
+                        // It's an IPv4 address
                         let addr = b.get_bytes(4)?;
-                        for i in 0..4 {
-                            print!("{} ", addr.buf()[i]);
-                        }
                         let addr: [u8; 4] = addr.buf().try_into().map_err(|_| Error::BufferTooShort)?;
-                        IpAddress::V4(Ipv4Addr::from(addr))
+                        std::net::IpAddr::V4(Ipv4Addr::from(addr))
                     } else {
-                        // else it's a v6 address and we need to put
+                        // It's an IPv6 address
                         let addr = b.get_bytes(16)?;
                         let bytes: &[u8] = addr.buf();
-                        if bytes.len() != 16 {
-                            return Err(Error::BufferTooShort);
-                        }
-                        // Convert the bytes to an array of 8 u16 segments filled with 0
                         let mut segments = [0u16; 8];
                         for i in 0..8 {
-                            // Convert each pair of bytes to a u16
                             segments[i] = u16::from_be_bytes([bytes[2 * i], bytes[2 * i + 1]]);
                         }
-                        IpAddress::V6(Ipv6Addr::from(segments))
+                        std::net::IpAddr::V6(Ipv6Addr::from(segments))
                     },
                     port: b.get_u16()?,
                 }
@@ -675,12 +661,11 @@ impl Frame {
                 b.put_varint(*sequence_number)?;
 
                 match address {
-                    IpAddress::V4(addr) => {
-                        b.put_bytes(addr.octets().as_ref())?;
+                    std::net::IpAddr::V4(addr) => {
+                        b.put_bytes(&addr.octets())?;
                     }
-
-                    IpAddress::V6(addr) => {
-                        b.put_bytes(addr.octets().as_ref())?;
+                    std::net::IpAddr::V6(addr) => {
+                        b.put_bytes(&addr.octets())?;
                     }
                 }
                 b.put_u16(*port)?;
@@ -914,14 +899,11 @@ impl Frame {
                 1 + // address type
                 size_of_val(&port) + // port
                 match address {
-                    IpAddress::V4(addr) => {
-                        // 4 bytes for IPv4 address
-                        4
+                    std::net::IpAddr::V4(addr) => {
+                        std::mem::size_of::<Ipv4Addr>()
                     }
-
-                    IpAddress::V6(addr) => {
-                        // 16 bytes for IPv6 address
-                        16
+                    std::net::IpAddr::V6(addr) => {
+                        std::mem::size_of::<Ipv6Addr>()
                     }
                 }
             }
@@ -1161,10 +1143,7 @@ impl Frame {
                 address_type: *address_type,
                 sequence_number: *sequence_number as u32,
                 port: *port as u32,
-                address: match address {
-                    IpAddress::V4(addr) => std::net::IpAddr::V4(*addr),
-                    IpAddress::V6(addr) => std::net::IpAddr::V6(*addr),
-                },
+                address: *address,
             },
 
         }
