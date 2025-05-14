@@ -24,6 +24,7 @@
 // NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+use std::net::IpAddr;
 use std::time;
 
 use std::collections::BTreeMap;
@@ -206,8 +207,11 @@ pub struct Path {
     /// Whether or not we should force eliciting of an ACK (e.g. via PING frame)
     pub needs_ack_eliciting: bool,
 
-    /// Wether or not the observed address has been sent
+    /// Whether or not the observed address has been sent
     pub observed_address_sent: bool,
+
+    /// The observed ip_addr&port of the peer, if any.
+    pub observed_peer_address: Option<(IpAddr, u16)>,
 }
 
 impl Path {
@@ -258,6 +262,7 @@ impl Path {
             migrating: false,
             needs_ack_eliciting: false,
             observed_address_sent: false,
+            observed_peer_address: None,
         }
     }
 
