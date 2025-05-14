@@ -4383,7 +4383,28 @@ impl Connection {
 
         // Create a single OBSERVED_ADDRESS frame
         if (pkt_type == packet::Type::Short || pkt_type == packet::Type::ZeroRTT) && !is_closing && path.active() {
-            
+            // Checking if the peer node asked to receive our address
+            if let Some(peer_ad_mode) = self.peer_transport_params.address_discovery {
+                if (peer_ad_mode == 1 || peer_ad_mode == 2) && !path.observed_address_sent {
+                    // Check if we are okay to send out address
+                    if let Some(self_addr_mode) = self.local_transport_params.address_discovery {
+                        if self_addr_mode == 0 || self_addr_mode == 2 {
+                            // Determine the type of address (v4 or v6).
+                            let addr = path.local_addr();
+                            let addr_type = None;
+                            
+                        };
+                            
+
+                            if push_frame_to_pkt!(b, frames, frame, left) {
+                                path.observed_address_sent = true;
+
+                                ack_eliciting = true;
+                                in_flight = true;
+                            };
+                    }
+                }
+            }
         }
 
 
@@ -8240,16 +8261,16 @@ pub struct TransportParams {
     pub retry_source_connection_id: Option<ConnectionId<'static>>,
     /// DATAGRAM frame extension parameter, if any.
     pub max_datagram_frame_size: Option<u64>,
-    /// Unknown peer transport parameters and values, if any.
-    pub unknown_params: Option<UnknownTransportParameters>,
-    // pub preferred_address: ...,
 
     /// The address discovery mode. Can be one of:
-    /// - 0: The node sending the packet is willing to send its address to the
-    ///   peer, but not to receive address observations.
+    /// - 0: The node sending the packet is willing to send its address to the peer, but not to receive address observations.
     /// - 1: The node sending the packet is willing to receive address observations from the peer, but not to send its address.
     /// - 2: The node sending the packet is willing to send its address to the peer and to receive address observations.
     pub address_discovery: Option<u8>,
+
+    /// Unknown peer transport parameters and values, if any.
+    pub unknown_params: Option<UnknownTransportParameters>,
+    // pub preferred_address: ...,
 }
 
 impl Default for TransportParams {

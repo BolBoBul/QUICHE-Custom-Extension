@@ -205,6 +205,9 @@ pub struct Path {
 
     /// Whether or not we should force eliciting of an ACK (e.g. via PING frame)
     pub needs_ack_eliciting: bool,
+
+    /// Wether or not the observed address has been sent
+    pub observed_address_sent: bool,
 }
 
 impl Path {
@@ -254,6 +257,7 @@ impl Path {
             failure_notified: false,
             migrating: false,
             needs_ack_eliciting: false,
+            observed_address_sent: false,
         }
     }
 
