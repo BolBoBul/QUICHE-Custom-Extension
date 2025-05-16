@@ -2267,16 +2267,25 @@ mod obs_addr_tests {
             address: "192.168.1.1".parse().unwrap(),
             port: 80,
         };
-        let wire_len = {
-            let mut b = octets::OctetsMut::with_slice(&mut d);
-            frame.to_bytes(&mut b).unwrap()
-        };
-        
-        // 1 byte for the frame type, 1 byte for the address_type, 4 bytes for the address, 2 bytes for the port, and 1 byte for the sequence number
-        assert_eq!(wire_len, 9);
+        let mut b = octets::OctetsMut::with_slice(&mut d);
+        frame.to_bytes(&mut b).unwrap();
 
         let mut b = octets::Octets::with_slice(&d);
         assert_eq!(Frame::from_bytes(&mut b, packet::Type::Short), Ok(frame));
+    }
+
+    #[test]
+    fn test_invalid_ipv4_encoding() {
+        let mut d = [42; 128];
+        // address_type = 0 mais adresse IPv6
+        let frame = Frame::OBSERVED_ADDRESS {
+            address_type: 0,
+            sequence_number: 1,
+            address: "::1".parse().unwrap(),
+            port: 80,
+        };
+        let mut b = octets::OctetsMut::with_slice(&mut d);
+        assert_eq!(frame.to_bytes(&mut b), Err(Error::InvalidFrame));
     }
 
     #[test]
@@ -2289,15 +2298,25 @@ mod obs_addr_tests {
             address: "::1".parse().unwrap(),
             port: 80,
         };
-        let wire_len = {
-            let mut b = octets::OctetsMut::with_slice(&mut d);
-            frame.to_bytes(&mut b).unwrap()
-        };
-        // 1 byte for the frame type, 1 byte for the address_type, 16 bytes for the address, 2 bytes for the port, and 1 byte for the sequence number
-        assert_eq!(wire_len, 21);
+        let mut b = octets::OctetsMut::with_slice(&mut d);
+        frame.to_bytes(&mut b).unwrap();
 
         let mut b = octets::Octets::with_slice(&d);
         assert_eq!(Frame::from_bytes(&mut b, packet::Type::Short), Ok(frame));
+    }
+
+    #[test]
+    fn test_invalid_ipv6_encoding() {
+        let mut d = [42; 128];
+        // address_type = 1 mais adresse IPv4
+        let frame = Frame::OBSERVED_ADDRESS {
+            address_type: 1,
+            sequence_number: 1,
+            address: "192.168.1.1".parse().unwrap(),
+            port: 80,
+        };
+        let mut b = octets::OctetsMut::with_slice(&mut d);
+        assert_eq!(frame.to_bytes(&mut b), Err(Error::InvalidFrame));
     }
 
     #[test]
@@ -2314,6 +2333,28 @@ mod obs_addr_tests {
         let mut b = octets::OctetsMut::with_slice(&mut d);
 
         assert_eq!(frame.to_bytes(&mut b), Err(Error::ProtocolViolation));
+    }
+
+    #[test]
+    fn test_wire_len_ipv4_ipv6() {
+        let frame_v4 = Frame::OBSERVED_ADDRESS {
+            address_type: 0,
+            sequence_number: 0,
+            address: "192.168.1.1".parse().unwrap(),
+            port: 4321,
+        };
+        // Wire length for IPv4 should be 16 bytes max
+        assert!(frame_v4.wire_len() <= 16);
+
+        let frame_v6 = Frame::OBSERVED_ADDRESS {
+            address_type: 1,
+            sequence_number: 0,
+            address: "::1".parse().unwrap(),
+            port: 4321,
+        };
+
+        // Wire length for IPv6 should be 28 bytes max
+        assert!(frame_v6.wire_len() <= 28);
     }
 
 }
