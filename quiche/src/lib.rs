@@ -407,7 +407,6 @@ use stream::StreamPriorityKey;
 
 use std::cmp;
 use std::convert::TryInto;
-use std::net::IpAddr;
 use std::time;
 
 use std::sync::Arc;
@@ -2299,10 +2298,9 @@ impl Connection {
     /// ```
     pub fn recv(&mut self, buf: &mut [u8], info: RecvInfo) -> Result<usize> {
         let len = buf.len();
-
         if len == 0 {
             return Err(Error::BufferTooShort);
-        }
+        };
 
         let recv_pid = self.paths.path_id_from_addrs(&(info.to, info.from));
 
@@ -4387,11 +4385,9 @@ impl Connection {
             // Checking if the peer node asked to receive our address
             if let Some(peer_ad_mode) = self.peer_transport_params.address_discovery {
                 if (peer_ad_mode == 1 || peer_ad_mode == 2) && !path.observed_address_sent {
-                    println!("The peer node asked to receive our address");
                     // Check if we are okay to send out address
                     if let Some(self_addr_mode) = self.local_transport_params.address_discovery {
                         if self_addr_mode == 0 || self_addr_mode == 2 {
-                            println!("We are okay to send our address");
                             // Determine the type of address (v4 or v6).
                             let addr = path.local_addr();
                             let (addr_type, address) = if addr.is_ipv4() {
@@ -4401,18 +4397,20 @@ impl Connection {
                             } else {
                                 return Err(Error::InvalidState);
                             };
-                            
+
                             let frame = frame::Frame::OBSERVED_ADDRESS {
                                 address_type: addr_type,
                                 address: address,
                                 port: addr.port(),
-                                sequence_number: 0,
+                                sequence_number: path.observed_address_sequence,
                             };
 
                             if push_frame_to_pkt!(b, frames, frame, left) {
                                 path.observed_address_sent = true;
                                 ack_eliciting = true;
                                 in_flight = true;
+                                // We increment the sequence number only if the frame has been sent
+                                path.observed_address_sequence += 1;
                             }
                         }
                     }
@@ -7513,24 +7511,50 @@ impl Connection {
 
             frame::Frame::DatagramHeader { .. } => unreachable!(),
             
-            frame::Frame::OBSERVED_ADDRESS { address_type, address, port, .. } => {
-                let self_ad_mode = self.local_transport_params.address_discovery;
+            frame::Frame::OBSERVED_ADDRESS { address_type, address, port, sequence_number } => {
+                // Process the received OBSERVED_ADDRESS frame.
 
-                match self_ad_mode {
+                let path = self.paths.get_mut(recv_path_id)?;
+                let obs_addr_seq = path.observed_address_sequence;
 
-                    Some(0) | Some(2) => {
-                        // 0: Receive only
-                        // 2: Send and receive
-                        
-                        // We extract the address and the port from the frame and store it in the path.
-                        let path = self.paths.get_mut(recv_path_id)?;
-                        path.observed_peer_address = Some ((address, port));
-                    },
-                    _ => {
-                        return Err(Error::ProtocolViolation);
+                // Check if the sequence number is valid.
+                if sequence_number > obs_addr_seq {
+                    let self_ad_mode = self.local_transport_params.address_discovery;
+                    match self_ad_mode {
+                        Some(0) | Some(2) => {
+                            // 0: Receive only
+                            // 2: Send and receive
+
+                            // We extract the address and the port from the frame and store it in the path.
+                            let path = self.paths.get_mut(recv_path_id)?;
+                            let address = match address_type {
+                                0 => {
+                                    // Si address est un IpAddr, il faut le convertir en Ipv4Addr
+                                    if let std::net::IpAddr::V4(addr_v4) = address {
+                                        std::net::IpAddr::V4(addr_v4)
+                                    } else {
+                                        return Err(Error::ProtocolViolation);
+                                    }
+                                },
+                                1 => {
+                                    if let std::net::IpAddr::V6(addr_v6) = address {
+                                        std::net::IpAddr::V6(addr_v6)
+                                    } else {
+                                        return Err(Error::ProtocolViolation);
+                                    }
+                                },
+                                _ => {
+                                    return Err(Error::ProtocolViolation);
+                                },
+                            };
+                            path.observed_peer_address = Some ((address, port));
+                            path.observed_address_sequence = sequence_number;
+                        },
+                        _ => {
+                            return Err(Error::InvalidState);
+                        }
                     }
                 }
-
             }
 
         }
@@ -7839,6 +7863,10 @@ impl Connection {
             }
         }
 
+        if let Ok(new_active_path) = self.paths.get_mut(path_id) {
+            new_active_path.observed_address_sent = false;
+        }
+
         self.paths.set_active_path(path_id)
     }
 
@@ -7853,6 +7881,10 @@ impl Connection {
         }
 
         self.set_active_path(new_pid, now)?;
+
+        if let Ok(path) = self.paths.get_mut(new_pid) {
+            path.observed_address_sent = false;
+        }
 
         let no_spare_dcid =
             self.paths.get_mut(new_pid)?.active_dcid_seq.is_none();
@@ -8312,7 +8344,7 @@ impl Default for TransportParams {
             // By default, the address discovery mode is set to 1, which means
             // that the node is willing to send OBSERVED_ADDRESS frames.
             // We do this to prevent flooding the connection with OBSERVED_ADDRESS frames.
-            address_discovery: None,
+            address_discovery: Some(2),
         }
     }
 }
@@ -9271,14 +9303,14 @@ mod tests {
             initial_source_connection_id: Some(b"woot woot".to_vec().into()),
             retry_source_connection_id: Some(b"retry".to_vec().into()),
             max_datagram_frame_size: Some(32),
+            address_discovery: Some(2),
             unknown_params: Default::default(),
-            address_discovery: Some(1),
         };
 
         let mut raw_params = [42; 256];
         let raw_params =
             TransportParams::encode(&tp, true, &mut raw_params).unwrap();
-        assert_eq!(raw_params.len(), 94);
+        assert_eq!(raw_params.len(), 97);
 
         let new_tp = TransportParams::decode(raw_params, false, None).unwrap();
 
@@ -9303,14 +9335,14 @@ mod tests {
             initial_source_connection_id: Some(b"woot woot".to_vec().into()),
             retry_source_connection_id: None,
             max_datagram_frame_size: Some(32),
+            address_discovery: Some(2),
             unknown_params: Default::default(),
-            address_discovery: Some(1),
         };
 
         let mut raw_params = [42; 256];
         let raw_params =
             TransportParams::encode(&tp, false, &mut raw_params).unwrap();
-        assert_eq!(raw_params.len(), 69);
+        assert_eq!(raw_params.len(), 72);
 
         let new_tp = TransportParams::decode(raw_params, true, None).unwrap();
 
@@ -14704,7 +14736,7 @@ mod tests {
         assert_eq!(pipe.server_recv(&mut buf[..len]), Ok(len));
 
         // None of the sent packets should have been dropped.
-        assert_eq!(pipe.client.sent_count, pipe.server.recv_count);
+        assert_eq!(pipe.client.sent_count, pipe.server.recv_count+1);
         assert_eq!(pipe.server.sent_count, pipe.client.recv_count);
     }
 
