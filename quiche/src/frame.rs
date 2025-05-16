@@ -660,13 +660,22 @@ impl Frame {
                 b.put_u8(*address_type)?;
                 b.put_varint(*sequence_number)?;
 
-                match address {
-                    std::net::IpAddr::V4(addr) => {
-                        b.put_bytes(&addr.octets())?;
-                    }
-                    std::net::IpAddr::V6(addr) => {
-                        b.put_bytes(&addr.octets())?;
-                    }
+                if *address_type == 0 {
+                    // It's an IPv4 address
+                    let addr = address
+                        .to_string()
+                        .parse::<Ipv4Addr>()
+                        .map_err(|_| Error::InvalidFrame)?;
+                    b.put_bytes(&addr.octets())?;
+                } else if *address_type == 1 {
+                    // It's an IPv6 address
+                    let addr = address
+                        .to_string()
+                        .parse::<Ipv6Addr>()
+                        .map_err(|_| Error::InvalidFrame)?;
+                    b.put_bytes(&addr.octets())?;
+                } else {
+                    return Err(Error::ProtocolViolation);
                 }
                 b.put_u16(*port)?;
             }
@@ -898,16 +907,12 @@ impl Frame {
                 octets::varint_len(*sequence_number) + // sequence_number
                 1 + // address type
                 size_of_val(&port) + // port
-                match address {
-                    std::net::IpAddr::V4(addr) => {
-                        std::mem::size_of::<Ipv4Addr>()
-                    }
-                    std::net::IpAddr::V6(addr) => {
-                        std::mem::size_of::<Ipv6Addr>()
-                    }
+                if address_type & 0x01 == 0 {
+                    std::mem::size_of::<Ipv4Addr>()
+                } else {
+                    std::mem::size_of::<Ipv6Addr>()
                 }
-            }
-
+            },
         }
     }
 
@@ -2246,27 +2251,69 @@ mod tests {
 
         assert_eq!(frame_data, data);
     }
+}
+
+#[cfg(test)]
+mod obs_addr_tests {
+    use super::*;
 
     #[test]
-    fn test_observed_address_code_decode() {
-        // We make sure that the parameters are coded and decoded in same order
-        // as they are defined in the Frame enum.
-        let frame = Frame::OBSERVED_ADDRESS {
-            address_type: 0x00,
-            sequence_number: 42,
-            address: std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 1)),
-            port: 80,
+    fn test_v4_encoding_decoding() {
+        let mut d = [42; 128];
 
+        let frame = Frame::OBSERVED_ADDRESS {
+            address_type: 0,
+            sequence_number: 42,
+            address: "192.168.1.1".parse().unwrap(),
+            port: 80,
+        };
+        let wire_len = {
+            let mut b = octets::OctetsMut::with_slice(&mut d);
+            frame.to_bytes(&mut b).unwrap()
         };
         
-        let mut buf = [0;128];
-        let mut b = octets::OctetsMut::with_slice(&mut buf);
-        frame.to_bytes(&mut b).unwrap();
+        // 1 byte for the frame type, 1 byte for the address_type, 4 bytes for the address, 2 bytes for the port, and 1 byte for the sequence number
+        assert_eq!(wire_len, 9);
 
-        let mut b = octets::Octets::with_slice(&buf);
-        let parsed_frame = Frame::from_bytes(&mut b, packet::Type::Short).unwrap();
+        let mut b = octets::Octets::with_slice(&d);
+        assert_eq!(Frame::from_bytes(&mut b, packet::Type::Short), Ok(frame));
+    }
 
-        assert_eq!(format!("{:?}", frame), format!("{:?}", parsed_frame));
+    #[test]
+    fn test_v6_encoding_decoding() {
+        let mut d = [42; 128];
+
+        let frame = Frame::OBSERVED_ADDRESS {
+            address_type: 1,
+            sequence_number: 42,
+            address: "::1".parse().unwrap(),
+            port: 80,
+        };
+        let wire_len = {
+            let mut b = octets::OctetsMut::with_slice(&mut d);
+            frame.to_bytes(&mut b).unwrap()
+        };
+        // 1 byte for the frame type, 1 byte for the address_type, 16 bytes for the address, 2 bytes for the port, and 1 byte for the sequence number
+        assert_eq!(wire_len, 21);
+
+        let mut b = octets::Octets::with_slice(&d);
+        assert_eq!(Frame::from_bytes(&mut b, packet::Type::Short), Ok(frame));
+    }
+
+    #[test]
+    fn test_invalid_address_type() {
+        let mut d = [42; 128];
+
+        let frame = Frame::OBSERVED_ADDRESS {
+            address_type: 2,
+            sequence_number: 42,
+            address: "::1".parse().unwrap(),
+            port: 80,
+        };
+        // We expect this to return a ProtocolViolation error because the address type is invalid
+        let mut b = octets::OctetsMut::with_slice(&mut d);
+
+        assert_eq!(frame.to_bytes(&mut b), Err(Error::ProtocolViolation));
     }
 
 }
