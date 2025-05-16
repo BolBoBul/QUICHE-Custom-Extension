@@ -903,15 +903,15 @@ impl Frame {
                 address,
                 port,
             } => {
-                octets::varint_parse_len(*address_type) + // address type
-                octets::varint_len(*sequence_number) + // sequence_number
-                1 + // address type
-                size_of_val(&port) + // port
-                if address_type & 0x01 == 0 {
-                    std::mem::size_of::<Ipv4Addr>()
+                1 + // frame type is 1 byte
+                1 + // address type is 1 byte
+                octets::varint_len(*sequence_number) + // sequence_number can be 8 bytes max
+                if *address_type == 0 {
+                    std::mem::size_of::<Ipv4Addr>() // IPv4 address is 4 bytes
                 } else {
-                    std::mem::size_of::<Ipv6Addr>()
-                }
+                    std::mem::size_of::<Ipv6Addr>() // IPv6 address is 16 bytes
+                } +
+                2 // port can be 2 bytes max
             },
         }
     }
