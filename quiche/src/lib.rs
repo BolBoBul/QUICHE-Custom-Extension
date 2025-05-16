@@ -17896,6 +17896,83 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod obs_addr_tests {
+    use super::*;
+    use crate::testing;
+
+    #[test]
+    fn observed_address_exchange_ipv4() {
+        let mut pipe = testing::Pipe::new().unwrap();
+        assert_eq!(pipe.handshake(), Ok(()));
+
+        // Simule l’envoi d’une frame OBSERVED_ADDRESS du client vers le serveur
+        let observed_addr = "192.0.2.1".parse().unwrap();
+        let frame = frame::Frame::OBSERVED_ADDRESS {
+            address_type: 0,
+            sequence_number: 2,
+            address: observed_addr,
+            port: 4242,
+        };
+
+        let pkt_type = packet::Type::Short;
+        let mut buf = [0; 1500];
+        let written = testing::encode_pkt(&mut pipe.client, pkt_type, &[frame], &mut buf).unwrap();
+        assert_eq!(pipe.server_recv(&mut buf[..written]), Ok(written));
+
+
+        // Vérifie que l’adresse a bien été stockée côté serveur
+        let path = pipe.server.paths.get_active().unwrap();
+        assert_eq!(path.observed_peer_address, Some((observed_addr, 4242)));
+    }
+
+    #[test]
+    fn observed_address_exchange_ipv6() {
+        let mut pipe = testing::Pipe::new().unwrap();
+        assert_eq!(pipe.handshake(), Ok(()));
+
+        // Simule l’envoi d’une frame OBSERVED_ADDRESS du serveur vers le client
+        let observed_addr = "::1".parse().unwrap();
+        let frame = frame::Frame::OBSERVED_ADDRESS {
+            address_type: 1,
+            sequence_number: 2,
+            address: observed_addr,
+            port: 1234,
+        };
+
+        let pkt_type = packet::Type::Short;
+        let mut buf = [0; 1500];
+        let written = testing::encode_pkt(&mut pipe.server, pkt_type, &[frame], &mut buf).unwrap();
+        assert_eq!(pipe.client_recv(&mut buf[..written]), Ok(written));
+
+        // Vérifie que l’adresse a bien été stockée côté client
+        let path = pipe.client.paths.get_active().unwrap();
+        assert_eq!(path.observed_peer_address, Some((observed_addr, 1234)));
+    }
+
+    #[test]
+    fn observed_address_wrong_type() {
+        let mut pipe = testing::Pipe::new().unwrap();
+        assert_eq!(pipe.handshake(), Ok(()));
+
+        // Envoie une frame OBSERVED_ADDRESS avec un type incohérent
+        let observed_addr = "192.0.2.1".parse().unwrap();
+        let frame = frame::Frame::OBSERVED_ADDRESS {
+            address_type: 1, // IPv6 alors que l'adresse est IPv4
+            sequence_number: 1,
+            address: observed_addr,
+            port: 4242,
+        };
+
+        let pkt_type = packet::Type::Short;
+        let mut buf = [0; 1500];
+        let written = testing::encode_pkt(&mut pipe.client, pkt_type, &[frame], &mut buf);
+
+        // Doit retourner une erreur de frame
+        assert_eq!(written, Err(Error::InvalidFrame));
+    }
+}
+
 pub use crate::packet::ConnectionId;
 pub use crate::packet::Header;
 pub use crate::packet::Type;
