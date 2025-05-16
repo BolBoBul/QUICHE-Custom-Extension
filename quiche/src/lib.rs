@@ -1373,6 +1373,11 @@ impl Config {
     pub fn enable_track_unknown_transport_parameters(&mut self, size: usize) {
         self.track_unknown_transport_params = Some(size);
     }
+
+    /// Set the address discovery mode (0, 1, or 2).
+    pub fn set_address_discovery_mode(&mut self, mode: u8) {
+        self.local_transport_params.address_discovery = Some(mode);
+    }
 }
 
 /// A QUIC connection.
@@ -4381,11 +4386,11 @@ impl Connection {
         }
 
         // Create a single OBSERVED_ADDRESS frame
-        if (pkt_type == packet::Type::Short || pkt_type == packet::Type::ZeroRTT) && !is_closing && path.active() {
+        if pkt_type == packet::Type::Short && !is_closing && path.active() {
             // Checking if the peer node asked to receive our address
             if let Some(peer_ad_mode) = self.peer_transport_params.address_discovery {
                 if (peer_ad_mode == 1 || peer_ad_mode == 2) && !path.observed_address_sent {
-                    // Check if we are okay to send out address
+                    // Check if we are okay to send the address
                     if let Some(self_addr_mode) = self.local_transport_params.address_discovery {
                         if self_addr_mode == 0 || self_addr_mode == 2 {
                             // Determine the type of address (v4 or v6).
@@ -7521,8 +7526,8 @@ impl Connection {
                 if sequence_number > obs_addr_seq {
                     let self_ad_mode = self.local_transport_params.address_discovery;
                     match self_ad_mode {
-                        Some(0) | Some(2) => {
-                            // 0: Receive only
+                        Some(1) | Some(2) => {
+                            // 1: Receive only
                             // 2: Send and receive
 
                             // We extract the address and the port from the frame and store it in the path.
@@ -8344,7 +8349,7 @@ impl Default for TransportParams {
             // By default, the address discovery mode is set to 1, which means
             // that the node is willing to send OBSERVED_ADDRESS frames.
             // We do this to prevent flooding the connection with OBSERVED_ADDRESS frames.
-            address_discovery: Some(2),
+            address_discovery: Some(0),
         }
     }
 }
@@ -14736,7 +14741,7 @@ mod tests {
         assert_eq!(pipe.server_recv(&mut buf[..len]), Ok(len));
 
         // None of the sent packets should have been dropped.
-        assert_eq!(pipe.client.sent_count, pipe.server.recv_count+1);
+        assert_eq!(pipe.client.sent_count, pipe.server.recv_count);
         assert_eq!(pipe.server.sent_count, pipe.client.recv_count);
     }
 
