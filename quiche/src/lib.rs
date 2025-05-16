@@ -4389,10 +4389,10 @@ impl Connection {
         }
 
         // Create a single OBSERVED_ADDRESS frame
-        if pkt_type == packet::Type::Short && !is_closing && path.active() {
+        if (pkt_type == packet::Type::Short || pkt_type == packet::Type::ZeroRTT) && !is_closing && path.active() && !path.observed_address_sent {
             // Checking if the peer node asked to receive our address
             if let Some(peer_ad_mode) = self.peer_transport_params.address_discovery {
-                if (peer_ad_mode == 1 || peer_ad_mode == 2) && !path.observed_address_sent {
+                if peer_ad_mode == 1 || peer_ad_mode == 2 {
                     // Check if we are okay to send the address
                     if let Some(self_addr_mode) = self.local_transport_params.address_discovery {
                         if self_addr_mode == 0 || self_addr_mode == 2 {
