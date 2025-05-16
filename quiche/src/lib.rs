@@ -8346,10 +8346,9 @@ impl Default for TransportParams {
             retry_source_connection_id: None,
             max_datagram_frame_size: None,
             unknown_params: Default::default(),
-            // By default, the address discovery mode is set to 1, which means
-            // that the node is willing to send OBSERVED_ADDRESS frames.
-            // We do this to prevent flooding the connection with OBSERVED_ADDRESS frames.
-            address_discovery: Some(0),
+            // By default, the address discovery mode is set to 2, which means
+            // that the node is willing to send & receive address observations.
+            address_discovery: Some(2),
         }
     }
 }
@@ -17960,6 +17959,8 @@ mod obs_addr_tests {
 
         // Vérifie que l’adresse a bien été stockée côté serveur
         let path = pipe.server.paths.get_active().unwrap();
+        println!("Observed address: {:?}", path.observed_peer_address);
+        println!("Expected address: {:?}", (observed_addr, 4242));
         assert_eq!(path.observed_peer_address, Some((observed_addr, 4242)));
     }
 
@@ -17984,6 +17985,8 @@ mod obs_addr_tests {
 
         // Vérifie que l’adresse a bien été stockée côté client
         let path = pipe.client.paths.get_active().unwrap();
+        println!("Observed address: {:?}", path.observed_peer_address);
+        println!("Expected address: {:?}", (observed_addr, 1234));
         assert_eq!(path.observed_peer_address, Some((observed_addr, 1234)));
     }
 
