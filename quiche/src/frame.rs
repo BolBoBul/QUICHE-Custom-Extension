@@ -900,8 +900,7 @@ impl Frame {
             Frame::OBSERVED_ADDRESS {
                 address_type,
                 sequence_number,
-                address,
-                port,
+                ..
             } => {
                 1 + // frame type is 1 byte
                 1 + // address type is 1 byte
