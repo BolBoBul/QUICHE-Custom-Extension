@@ -210,6 +210,9 @@ pub struct Path {
     /// Whether or not the observed address has been sent
     pub observed_address_sent: bool,
 
+    /// The observed address sequence number.
+    pub observed_address_sequence: u64,
+
     /// The observed ip_addr&port of the peer, if any.
     pub observed_peer_address: Option<(IpAddr, u16)>,
 }
@@ -262,6 +265,7 @@ impl Path {
             migrating: false,
             needs_ack_eliciting: false,
             observed_address_sent: false,
+            observed_address_sequence: 0,
             observed_peer_address: None,
         }
     }
