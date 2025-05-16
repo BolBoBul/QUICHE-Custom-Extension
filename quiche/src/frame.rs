@@ -368,7 +368,7 @@ impl Frame {
                         let addr = b.get_bytes(4)?;
                         let addr: [u8; 4] = addr.buf().try_into().map_err(|_| Error::BufferTooShort)?;
                         std::net::IpAddr::V4(Ipv4Addr::from(addr))
-                    } else {
+                    } else if address_type & 0x01 == 1 {
                         // It's an IPv6 address
                         let addr = b.get_bytes(16)?;
                         let bytes: &[u8] = addr.buf();
@@ -377,6 +377,9 @@ impl Frame {
                             segments[i] = u16::from_be_bytes([bytes[2 * i], bytes[2 * i + 1]]);
                         }
                         std::net::IpAddr::V6(Ipv6Addr::from(segments))
+                    }
+                    else {
+                        return Err(Error::TransportParameterError);
                     },
                     port: b.get_u16()?,
                 }
@@ -675,7 +678,7 @@ impl Frame {
                         .map_err(|_| Error::InvalidFrame)?;
                     b.put_bytes(&addr.octets())?;
                 } else {
-                    return Err(Error::ProtocolViolation);
+                    return Err(Error::TransportParameterError);
                 }
                 b.put_u16(*port)?;
             }
@@ -2331,7 +2334,7 @@ mod obs_addr_tests {
         // We expect this to return a ProtocolViolation error because the address type is invalid
         let mut b = octets::OctetsMut::with_slice(&mut d);
 
-        assert_eq!(frame.to_bytes(&mut b), Err(Error::ProtocolViolation));
+        assert_eq!(frame.to_bytes(&mut b), Err(Error::TransportParameterError));
     }
 
     #[test]

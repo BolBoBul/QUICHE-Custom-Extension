@@ -580,6 +580,9 @@ pub enum Error {
     /// The peer sent more data in CRYPTO frames than we can buffer.
     CryptoBufferExceeded,
 
+    /// Transport parameter error.
+    TransportParameterError,
+
     /// Protocol violation.
     ProtocolViolation,
 }
@@ -7556,7 +7559,7 @@ impl Connection {
                             path.observed_address_sequence = sequence_number;
                         },
                         _ => {
-                            return Err(Error::InvalidState);
+                            return Err(Error::ProtocolViolation);
                         }
                     }
                 }
