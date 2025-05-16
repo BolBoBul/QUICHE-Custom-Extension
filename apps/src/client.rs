@@ -48,8 +48,6 @@ pub fn connect(
     args: ClientArgs, conn_args: CommonArgs,
     output_sink: impl FnMut(String) + 'static,
 ) -> Result<(), ClientError> {
-    println!("AAAAAA: connecting to {:?}", args.urls);
-    println!("BBBBB: using QUIC version {:?}", args.version);
     let mut buf = [0; 65535];
     let mut out = [0; MAX_DATAGRAM_SIZE];
 
