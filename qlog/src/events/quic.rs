@@ -518,8 +518,8 @@ pub enum QuicFrame {
         raw: Option<Bytes>,
     },
 
-    OBSERVED_ADDRESS {
-        address_type: u8,
+    ObservedAddress {
+        obs_frame_type: u8,
         sequence_number: u32,
         address: std::net::IpAddr,
         port: u32,
