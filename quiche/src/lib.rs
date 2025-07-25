@@ -498,6 +498,8 @@ const DEFAULT_INITIAL_CONGESTION_WINDOW_PACKETS: usize = 10;
 // The maximum data offset that can be stored in a crypto stream.
 const MAX_CRYPTO_STREAM_OFFSET: u64 = 1 << 16;
 
+const ADDRESS_DISCOVERY: u64 = 0x9f81a176;
+
 /// A specialized [`Result`] type for quiche operations.
 ///
 /// This type is used throughout quiche's public API for any operation that
@@ -4388,7 +4390,7 @@ impl Connection {
             }
         }
 
-        // Create a single OBSERVED_ADDRESS frame
+        // Create a single ObservedAddress frame
         if (pkt_type == packet::Type::Short || pkt_type == packet::Type::ZeroRTT) && !is_closing && path.active() && !path.observed_address_sent {
             // Checking if the peer node asked to receive our address
             if let Some(peer_ad_mode) = self.peer_transport_params.address_discovery {
@@ -4406,8 +4408,8 @@ impl Connection {
                                 return Err(Error::InvalidState);
                             };
 
-                            let frame = frame::Frame::OBSERVED_ADDRESS {
-                                address_type: addr_type,
+                            let frame = frame::Frame::ObservedAddress {
+                                obs_frame_type: addr_type,
                                 address: address,
                                 port: addr.port(),
                                 sequence_number: path.observed_address_sequence,
@@ -6812,6 +6814,13 @@ impl Connection {
             );
         }
 
+        if let Some(address_discovery) = peer_params.address_discovery {
+            if address_discovery > 2 {
+                return Err(Error::TransportParameterError);
+            }
+        }
+
+
         // Record the max_active_conn_id parameter advertised by the peer.
         self.ids
             .set_source_conn_id_limit(peer_params.active_conn_id_limit);
@@ -7519,8 +7528,8 @@ impl Connection {
 
             frame::Frame::DatagramHeader { .. } => unreachable!(),
             
-            frame::Frame::OBSERVED_ADDRESS { address_type, address, port, sequence_number } => {
-                // Process the received OBSERVED_ADDRESS frame.
+            frame::Frame::ObservedAddress { obs_frame_type, address, port, sequence_number } => {
+                // Process the received ObservedAddress frame.
 
                 let path = self.paths.get_mut(recv_path_id)?;
                 let obs_addr_seq = path.observed_address_sequence;
@@ -7535,7 +7544,7 @@ impl Connection {
 
                             // We extract the address and the port from the frame and store it in the path.
                             let path = self.paths.get_mut(recv_path_id)?;
-                            let address = match address_type {
+                            let address = match obs_frame_type {
                                 0 => {
                                     // Si address est un IpAddr, il faut le convertir en Ipv4Addr
                                     if let std::net::IpAddr::V4(addr_v4) = address {
@@ -8318,9 +8327,9 @@ pub struct TransportParams {
     pub max_datagram_frame_size: Option<u64>,
 
     /// The address discovery mode. Can be one of:
-    /// - 0: The node sending the packet is willing to send its address to the peer, but not to receive address observations.
-    /// - 1: The node sending the packet is willing to receive address observations from the peer, but not to send its address.
-    /// - 2: The node sending the packet is willing to send its address to the peer and to receive address observations.
+    /// - 0: The node is willing to provide address observations to its peer, but is not interested in receiving address observations itself.
+    /// - 1: The node is interested in receiving address observations, but it is not willing to provide address observations.
+    /// - 2: The node is interested in receiving address observations, and it is willing to provide address observations.
     pub address_discovery: Option<u8>,
 
     /// Unknown peer transport parameters and values, if any.
@@ -8349,9 +8358,8 @@ impl Default for TransportParams {
             retry_source_connection_id: None,
             max_datagram_frame_size: None,
             unknown_params: Default::default(),
-            // By default, the address discovery mode is set to 2, which means
-            // that the node is willing to send & receive address observations.
-            address_discovery: Some(2),
+            // By default, the address discovery mode is set to None, in case the extension could not have been negotiated.
+            address_discovery: None,
         }
     }
 }
@@ -8374,6 +8382,7 @@ impl TransportParams {
 
         while params.cap() > 0 {
             let id = params.get_varint()?;
+            let len = params.get_varint()? as usize;
 
             if seen_params.contains(&id) {
                 return Err(Error::InvalidTransportParam);
@@ -8515,12 +8524,15 @@ impl TransportParams {
                 // If the value is not 0, 1 or 2, it is an error.
                 // observations from the peer, but not to send its address.
                 // See https://datatracker.ietf.org/doc/draft-ietf-quic-address-discovery/00/
-                0x0030 => {
-                    let discovery_mode = val.get_varint()?;
-                    if discovery_mode > 2 {
+                ADDRESS_DISCOVERY => {
+                    if len != 1 {
                         return Err(Error::InvalidTransportParam);
                     }
-                    tp.address_discovery = Some(discovery_mode as u8);
+                    let mode = val.get_u8()?;
+                    if mode > 2 {
+                        return Err(Error::InvalidTransportParam);
+                    }
+                    tp.address_discovery = Some(mode);
                 },
 
                 // Track unknown transport parameters specially.
@@ -8695,12 +8707,9 @@ impl TransportParams {
         }
 
         if let Some(address_discovery_mode) = tp.address_discovery {
-            TransportParams::encode_param(
-                &mut b,
-                0x0030,
-                octets::varint_len(address_discovery_mode as u64),
-            )?;
-            b.put_varint(address_discovery_mode as u64)?;
+            b.put_varint(ADDRESS_DISCOVERY)?;   // Transport Parameter ID
+            b.put_varint(1)?;   // Length (1 byte)
+            b.put_u8(address_discovery_mode)?;  // Value
         }
 
         let out_len = b.off();
@@ -17945,10 +17954,10 @@ mod obs_addr_tests {
         let mut pipe = testing::Pipe::new().unwrap();
         assert_eq!(pipe.handshake(), Ok(()));
 
-        // Simule l’envoi d’une frame OBSERVED_ADDRESS du client vers le serveur
+        // Simule l’envoi d’une frame ObservedAddress du client vers le serveur
         let observed_addr = "192.0.2.1".parse().unwrap();
-        let frame = frame::Frame::OBSERVED_ADDRESS {
-            address_type: 0,
+        let frame = frame::Frame::ObservedAddress {
+            obs_frame_type: 0,
             sequence_number: 2,
             address: observed_addr,
             port: 4242,
@@ -17972,10 +17981,10 @@ mod obs_addr_tests {
         let mut pipe = testing::Pipe::new().unwrap();
         assert_eq!(pipe.handshake(), Ok(()));
 
-        // Simule l’envoi d’une frame OBSERVED_ADDRESS du serveur vers le client
+        // Simule l’envoi d’une frame ObservedAddress du serveur vers le client
         let observed_addr = "::1".parse().unwrap();
-        let frame = frame::Frame::OBSERVED_ADDRESS {
-            address_type: 1,
+        let frame = frame::Frame::ObservedAddress {
+            obs_frame_type: 1,
             sequence_number: 2,
             address: observed_addr,
             port: 1234,
@@ -17998,10 +18007,10 @@ mod obs_addr_tests {
         let mut pipe = testing::Pipe::new().unwrap();
         assert_eq!(pipe.handshake(), Ok(()));
 
-        // Envoie une frame OBSERVED_ADDRESS avec un type incohérent
+        // Envoie une frame ObservedAddress avec un type incohérent
         let observed_addr = "192.0.2.1".parse().unwrap();
-        let frame = frame::Frame::OBSERVED_ADDRESS {
-            address_type: 1, // IPv6 alors que l'adresse est IPv4
+        let frame = frame::Frame::ObservedAddress {
+            obs_frame_type: 1, // IPv6 alors que l'adresse est IPv4
             sequence_number: 1,
             address: observed_addr,
             port: 4242,

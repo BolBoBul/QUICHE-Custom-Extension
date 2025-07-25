@@ -58,7 +58,6 @@ pub struct EcnCounts {
     ecn_ce_count: u64,
 }
 
-
 #[derive(Clone, PartialEq, Eq)]
 pub enum Frame {
     Padding {
@@ -190,21 +189,15 @@ pub enum Frame {
         length: usize,
     },
 
-    OBSERVED_ADDRESS {
+    ObservedAddress {
         // Sent by a node to inform its peer about the address it is using to send packets as described in https://datatracker.ietf.org/doc/draft-ietf-quic-address-discovery/00/
 
-        /// 3 possible values:
-        //  - 0 : I'll tell yours but you don't tell mine
-        //  - 1 : I won't tell yours but you tell mine
-        //  - 2 : I'll tell yours and you tell mine
+        /// During the handshake, 3 possible values for the TransParam:
+        //  - 0 : I can send you ObservedAddress but I cannot receive
+        //  - 1 : I can't send you ObservedAddress but I can receive
+        //  - 2 : I can both send and receive
 
-        /// 0: Receive only
-        /// 1: Send only
-        /// 2: Send and receive
-
-        /// If the least significant bit of the address type is 0, then it's a v4 address. Else it's a v6 address.
-        /// The port is 2 bytes long.
-        address_type: u8,
+        obs_frame_type: u64,
         sequence_number: u64,
         address: std::net::IpAddr,
         port: u16,
@@ -354,40 +347,90 @@ impl Frame {
             },
 
             0x1e => Frame::HandshakeDone,
-
-
-            // We attribute the value 0x29 to the OBSERVED_ADDRESS frame type.
-            0x29 => {
-                let address_type = b.get_u8()?; // Read it once
             
-                Frame::OBSERVED_ADDRESS {
-                    address_type,
-                    sequence_number: b.get_varint()?,
-                    address: if address_type & 0x01 == 0 {
-                        // It's an IPv4 address
-                        let addr = b.get_bytes(4)?;
-                        let addr: [u8; 4] = addr.buf().try_into().map_err(|_| Error::BufferTooShort)?;
-                        std::net::IpAddr::V4(Ipv4Addr::from(addr))
-                    } else if address_type & 0x01 == 1 {
-                        // It's an IPv6 address
-                        let addr = b.get_bytes(16)?;
-                        let bytes: &[u8] = addr.buf();
-                        let mut segments = [0u16; 8];
-                        for i in 0..8 {
-                            segments[i] = u16::from_be_bytes([bytes[2 * i], bytes[2 * i + 1]]);
-                        }
-                        std::net::IpAddr::V6(Ipv6Addr::from(segments))
+            0x30 | 0x31 => parse_datagram_frame(frame_type, b)?,
+
+            // We attribute the value 0x9f81a176 to the ObservedAddress frame type for interoperability with the draft-ietf-quic-address-discovery-00.
+            
+            0x9f81a6..=0x9f81a7 => {
+                let obs_frame_type = frame_type; // Frame Type
+
+                let sequence_number = b.get_varint()?; // Sequence Number
+            
+                let address = if frame_type & 0x01 == 0 { // We determine IP type based on the Least Significant Bit
+                    // IPv4 Address
+                    let addr = b.get_bytes(4)?; // For IPv4
+                    if addr.len() != 4 {
+                        return Err(Error::BufferTooShort);
                     }
-                    else {
-                        return Err(Error::TransportParameterError);
-                    },
-                    port: b.get_u16()?,
+                    let addr: [u8; 4] = addr.buf().try_into().map_err(|_| Error::BufferTooShort)?;
+                    std::net::IpAddr::V4(Ipv4Addr::from(addr))
+                } else {
+                    // Adresse IPv6
+                    let addr = b.get_bytes(16)?; // For IPv6
+                    if addr.len() != 16 {
+                        return Err(Error::BufferTooShort);
+                    }
+                    let bytes: &[u8] = addr.buf();
+                    let mut segments = [0u16; 8];
+                    for i in 0..8 {
+                        segments[i] = u16::from_be_bytes([bytes[2 * i], bytes[2 * i + 1]]);
+                    }
+                    std::net::IpAddr::V6(Ipv6Addr::from(segments))
+                };
+            
+                let port = b.get_u16()?; // Port
+            
+                Frame::ObservedAddress {
+                    obs_frame_type,
+                    sequence_number,
+                    address,
+                    port,
                 }
             }
-            
-            
 
-            0x30 | 0x31 => parse_datagram_frame(frame_type, b)?,
+            /*
+            0x9f81a6 => {
+                let frame_type = obs_frame_type; // Type de la frame
+                let sequence_number = b.get_varint()?; // Numéro de séquence
+
+                let address = {
+                    let addr = b.get_bytes(4)?;
+                    if addr.len() != 4 {
+                        return Err(Error::BufferTooShort);
+                    }
+                    let addr: [u8; 4] = addr.buf().try_into().map_err(|_| Error::BufferTooShort)?;
+                    std::net::IpAddr::V4(Ipv4Addr::from(addr))
+                };
+                
+                let port = b.get_u16()?; // Port
+
+                Frame::ObservedAddress {
+                    obs_frame_type,
+                    sequence_number,
+                    address,
+                    port,
+                }
+            }
+
+            0x9f81a7 => {
+                let frame_type = obs_frame_type; // Type de la frame
+                let sequence_number = b.get_varint()?; // Numéro de séquence
+
+                let address = {
+                    let addr = b.get_bytes(16)?;
+                    if addr.len() != 16 {
+                        return Err(Error::BufferTooShort);
+                    }
+                    let bytes: &[u8] = addr.buf();
+                    let mut segments = [0u16; 8];
+                    for i in 0..8 {
+                        segments[i] = u16::from_be_bytes([bytes[2 * i], bytes[2 * i + 1]]);
+                    }
+                    std::net::IpAddr::V6(Ipv6Addr::from(segments))
+                };
+            }
+            */
 
             _ => return Err(Error::InvalidFrame),
         };
@@ -652,33 +695,30 @@ impl Frame {
 
             Frame::DatagramHeader { .. } => (),
 
-            Frame::OBSERVED_ADDRESS {
-                address_type,
+            Frame::ObservedAddress {
+                obs_frame_type,
                 sequence_number,
                 address,
                 port,
             } => {
-                b.put_varint(0x29)?;
-
-                b.put_u8(*address_type)?;
+                b.put_varint(*obs_frame_type)?;
                 b.put_varint(*sequence_number)?;
 
-                if *address_type == 0 {
-                    // It's an IPv4 address
-                    let addr = address
-                        .to_string()
-                        .parse::<Ipv4Addr>()
-                        .map_err(|_| Error::InvalidFrame)?;
-                    b.put_bytes(&addr.octets())?;
-                } else if *address_type == 1 {
-                    // It's an IPv6 address
-                    let addr = address
-                        .to_string()
-                        .parse::<Ipv6Addr>()
-                        .map_err(|_| Error::InvalidFrame)?;
-                    b.put_bytes(&addr.octets())?;
-                } else {
-                    return Err(Error::TransportParameterError);
+                match address {
+                    std::net::IpAddr::V4(addr) => {
+                        // Vérifie que le type de frame correspond à IPv4
+                        if *obs_frame_type != 0x9f81a6 {
+                            return Err(Error::InvalidFrame);
+                        }
+                        b.put_bytes(&addr.octets())?; // Adresse IPv4 (4 octets)
+                    },
+                    std::net::IpAddr::V6(addr) => {
+                        // Vérifie que le type de frame correspond à IPv6
+                        if *obs_frame_type != 0x9f81a7 {
+                            return Err(Error::InvalidFrame);
+                        }
+                        b.put_bytes(&addr.octets())?; // Adresse IPv6 (16 octets)
+                    },
                 }
                 b.put_u16(*port)?;
             }
@@ -900,20 +940,36 @@ impl Frame {
                 *length // data
             },
 
-            Frame::OBSERVED_ADDRESS {
-                address_type,
+            Frame::ObservedAddress {
+                obs_frame_type,
                 sequence_number,
+                address,
                 ..
             } => {
-                1 + // frame type is 1 byte
-                1 + // address type is 1 byte
-                octets::varint_len(*sequence_number) + // sequence_number can be 8 bytes max
-                if *address_type == 0 {
-                    std::mem::size_of::<Ipv4Addr>() // IPv4 address is 4 bytes
-                } else {
-                    std::mem::size_of::<Ipv6Addr>() // IPv6 address is 16 bytes
-                } +
-                2 // port can be 2 bytes max
+                let mut len = 0;
+
+                len += octets::varint_len(*obs_frame_type); // Frame type
+                len += octets::varint_len(*sequence_number); // Sequence number
+
+                match address {
+                    std::net::IpAddr::V4(_) => {
+                        // Check that the frame type matches to IPv4
+                        if *obs_frame_type != 0x9f81a6 {
+                            return 0; // Return an invalid size to indicate error
+                        }
+                        len += 4; // Size of IPv4 address
+                    },
+                    std::net::IpAddr::V6(_) => {
+                        // Check that the frame type matches to IPv6
+                        if *obs_frame_type != 0x9f81a7 {
+                            return 0; // Return an invalid size to indicate error
+                        }
+                        len += 16; // Size of IPv6 address
+                    },
+                }
+
+                len += 2; // Port size (2 bytes)
+                len
             },
         }
     }
@@ -1141,13 +1197,13 @@ impl Frame {
                 raw: None,
             },
 
-            Frame::OBSERVED_ADDRESS {
-                address_type,
+            Frame::ObservedAddress {
+                obs_frame_type,
                 sequence_number,
                 address,
                 port,
-            } => QuicFrame::OBSERVED_ADDRESS {
-                address_type: *address_type,
+            } => QuicFrame::ObservedAddress {
+                obs_frame_type: *obs_frame_type as u8,
                 sequence_number: *sequence_number as u32,
                 port: *port as u32,
                 address: *address,
@@ -1321,18 +1377,17 @@ impl std::fmt::Debug for Frame {
                 write!(f, "DATAGRAM len={length}")?;
             },
 
-            Frame::OBSERVED_ADDRESS {
-                address_type,
+            Frame::ObservedAddress {
+                obs_frame_type,
                 sequence_number,
                 address,
                 port,
             } => {
                 write!(
                     f,
-                    "OBSERVED_ADDRESS address_type={address_type} sequence_number={sequence_number} port={port} address={address:?}"
+                    "ObservedAddress address_type={obs_frame_type} sequence_number={sequence_number} port={port} address={address:?}"
                 )?;
             },
-
 
         }
 
@@ -2261,14 +2316,15 @@ mod obs_addr_tests {
 
     #[test]
     fn test_v4_encoding_decoding() {
-        let mut d = [42; 128];
+        let mut d = [0; 128];
 
-        let frame = Frame::OBSERVED_ADDRESS {
-            address_type: 0,
+        let frame = Frame::ObservedAddress {
+            obs_frame_type: 0x9f81a6, // IPv4
             sequence_number: 42,
             address: "192.168.1.1".parse().unwrap(),
-            port: 80,
+            port: 1234,
         };
+
         let mut b = octets::OctetsMut::with_slice(&mut d);
         frame.to_bytes(&mut b).unwrap();
 
@@ -2278,10 +2334,10 @@ mod obs_addr_tests {
 
     #[test]
     fn test_invalid_ipv4_encoding() {
+        // IPv4 Frame but IPv6 given
         let mut d = [42; 128];
-        // address_type = 0 mais adresse IPv6
-        let frame = Frame::OBSERVED_ADDRESS {
-            address_type: 0,
+        let frame = Frame::ObservedAddress {
+            obs_frame_type: 0x9f81a6,
             sequence_number: 1,
             address: "::1".parse().unwrap(),
             port: 80,
@@ -2292,14 +2348,15 @@ mod obs_addr_tests {
 
     #[test]
     fn test_v6_encoding_decoding() {
-        let mut d = [42; 128];
+        let mut d = [0; 128];
 
-        let frame = Frame::OBSERVED_ADDRESS {
-            address_type: 1,
+        let frame = Frame::ObservedAddress {
+            obs_frame_type: 0x9f81a7, // IPv6
             sequence_number: 42,
             address: "::1".parse().unwrap(),
-            port: 80,
+            port: 1234,
         };
+
         let mut b = octets::OctetsMut::with_slice(&mut d);
         frame.to_bytes(&mut b).unwrap();
 
@@ -2309,10 +2366,10 @@ mod obs_addr_tests {
 
     #[test]
     fn test_invalid_ipv6_encoding() {
+        // IPv6 Frame but IPv4 given
         let mut d = [42; 128];
-        // address_type = 1 mais adresse IPv4
-        let frame = Frame::OBSERVED_ADDRESS {
-            address_type: 1,
+        let frame = Frame::ObservedAddress {
+            obs_frame_type: 0x9f81a7,
             sequence_number: 1,
             address: "192.168.1.1".parse().unwrap(),
             port: 80,
@@ -2322,25 +2379,25 @@ mod obs_addr_tests {
     }
 
     #[test]
-    fn test_invalid_address_type() {
+    fn test_invalid_frame_type() {
         let mut d = [42; 128];
 
-        let frame = Frame::OBSERVED_ADDRESS {
-            address_type: 2,
+        let frame = Frame::ObservedAddress {
+            obs_frame_type: 0x9f81a8, // Invalid frame type
             sequence_number: 42,
             address: "::1".parse().unwrap(),
             port: 80,
         };
-        // We expect this to return a ProtocolViolation error because the address type is invalid
+        // We expect this to return a InvalidFrame error because the frame type is not recognized
         let mut b = octets::OctetsMut::with_slice(&mut d);
 
-        assert_eq!(frame.to_bytes(&mut b), Err(Error::TransportParameterError));
+        assert_eq!(frame.to_bytes(&mut b), Err(Error::InvalidFrame));
     }
 
     #[test]
     fn test_wire_len_ipv4_ipv6() {
-        let frame_v4 = Frame::OBSERVED_ADDRESS {
-            address_type: 0,
+        let frame_v4 = Frame::ObservedAddress {
+            obs_frame_type: 0x9f81a6,
             sequence_number: 0,
             address: "192.168.1.1".parse().unwrap(),
             port: 4321,
@@ -2348,8 +2405,8 @@ mod obs_addr_tests {
         // Wire length for IPv4 should be 16 bytes max
         assert!(frame_v4.wire_len() <= 16);
 
-        let frame_v6 = Frame::OBSERVED_ADDRESS {
-            address_type: 1,
+        let frame_v6 = Frame::ObservedAddress {
+            obs_frame_type: 0x9f81a7,
             sequence_number: 0,
             address: "::1".parse().unwrap(),
             port: 4321,
@@ -2357,6 +2414,26 @@ mod obs_addr_tests {
 
         // Wire length for IPv6 should be 28 bytes max
         assert!(frame_v6.wire_len() <= 28);
+    }
+
+    #[test]
+    fn test_invalid_ipv4_buffer() {
+        let d = [0; 3]; // Buffer too small buffer for an IPv4 address
+        let mut b = octets::Octets::with_slice(&d);
+        assert!(matches!(
+            Frame::from_bytes(&mut b, packet::Type::Short),
+            Err(Error::BufferTooShort)
+        ));
+    }
+
+    #[test]
+    fn test_invalid_ipv6_buffer() {
+        let d = [0; 15]; // Buffer too small for an IPv6 address
+        let mut b = octets::Octets::with_slice(&d);
+        assert!(matches!(
+            Frame::from_bytes(&mut b, packet::Type::Short),
+            Err(Error::BufferTooShort)
+        ));
     }
 
 }
