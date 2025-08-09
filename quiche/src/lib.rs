@@ -432,9 +432,6 @@ pub const MAX_CONN_ID_LEN: usize = crate::packet::MAX_CID_LEN as usize;
 /// The minimum length of Initial packets sent by a client.
 pub const MIN_CLIENT_INITIAL_LEN: usize = 1200;
 
-/// Address discovery transport parameter
-pub const TP_ADDRESS_DISCOVERY: u64 = 0x9f81a176;
-
 #[cfg(not(feature = "fuzzing"))]
 const PAYLOAD_MIN_LEN: usize = 4;
 
@@ -497,8 +494,6 @@ const DEFAULT_INITIAL_CONGESTION_WINDOW_PACKETS: usize = 10;
 
 // The maximum data offset that can be stored in a crypto stream.
 const MAX_CRYPTO_STREAM_OFFSET: u64 = 1 << 16;
-
-const ADDRESS_DISCOVERY: u64 = 0x9f81a176;
 
 /// A specialized [`Result`] type for quiche operations.
 ///
@@ -1381,7 +1376,7 @@ impl Config {
 
     /// Set the address discovery mode (0, 1, or 2).
     pub fn set_address_discovery_mode(&mut self, mode: u8) {
-        self.local_transport_params.address_discovery = Some(mode);
+        self.local_transport_params.address_discovery_mode = Some(mode);
     }
 }
 
@@ -4393,10 +4388,10 @@ impl Connection {
         // Create a single ObservedAddress frame
         if (pkt_type == packet::Type::Short || pkt_type == packet::Type::ZeroRTT) && !is_closing && path.active() && !path.observed_address_sent {
             // Checking if the peer node asked to receive our address
-            if let Some(peer_ad_mode) = self.peer_transport_params.address_discovery {
+            if let Some(peer_ad_mode) = self.peer_transport_params.address_discovery_mode {
                 if peer_ad_mode == 1 || peer_ad_mode == 2 {
                     // Check if we are okay to send the address
-                    if let Some(self_addr_mode) = self.local_transport_params.address_discovery {
+                    if let Some(self_addr_mode) = self.local_transport_params.address_discovery_mode {
                         if self_addr_mode == 0 || self_addr_mode == 2 {
                             // Determine the type of address (v4 or v6).
                             let addr = path.local_addr();
@@ -6814,8 +6809,8 @@ impl Connection {
             );
         }
 
-        if let Some(address_discovery) = peer_params.address_discovery {
-            if address_discovery > 2 {
+        if let Some(address_discovery_mode) = peer_params.address_discovery_mode {
+            if address_discovery_mode > 2 {
                 return Err(Error::TransportParameterError);
             }
         }
@@ -8330,7 +8325,7 @@ pub struct TransportParams {
     /// - 0: The node is willing to provide address observations to its peer, but is not interested in receiving address observations itself.
     /// - 1: The node is interested in receiving address observations, but it is not willing to provide address observations.
     /// - 2: The node is interested in receiving address observations, and it is willing to provide address observations.
-    pub address_discovery: Option<u8>,
+    pub address_discovery_mode: Option<u8>,
 
     /// Unknown peer transport parameters and values, if any.
     pub unknown_params: Option<UnknownTransportParameters>,
@@ -8359,7 +8354,7 @@ impl Default for TransportParams {
             max_datagram_frame_size: None,
             unknown_params: Default::default(),
             // By default, the address discovery mode is set to None, in case the extension could not have been negotiated.
-            address_discovery: None,
+            address_discovery_mode: None,
         }
     }
 }
@@ -8381,8 +8376,9 @@ impl TransportParams {
         }
 
         while params.cap() > 0 {
+            //eprintln!("Treating {} bytes as transport parameters", params.cap());
+
             let id = params.get_varint()?;
-            let len = params.get_varint()? as usize;
 
             if seen_params.contains(&id) {
                 return Err(Error::InvalidTransportParam);
@@ -8524,15 +8520,12 @@ impl TransportParams {
                 // If the value is not 0, 1 or 2, it is an error.
                 // observations from the peer, but not to send its address.
                 // See https://datatracker.ietf.org/doc/draft-ietf-quic-address-discovery/00/
-                ADDRESS_DISCOVERY => {
-                    if len != 1 {
-                        return Err(Error::InvalidTransportParam);
-                    }
+                0x9f81a176 => {
                     let mode = val.get_u8()?;
                     if mode > 2 {
                         return Err(Error::InvalidTransportParam);
                     }
-                    tp.address_discovery = Some(mode);
+                    tp.address_discovery_mode = Some(mode);
                 },
 
                 // Track unknown transport parameters specially.
@@ -8706,10 +8699,9 @@ impl TransportParams {
             b.put_varint(max_datagram_frame_size)?;
         }
 
-        if let Some(address_discovery_mode) = tp.address_discovery {
-            b.put_varint(ADDRESS_DISCOVERY)?;   // Transport Parameter ID
-            b.put_varint(1)?;   // Length (1 byte)
-            b.put_u8(address_discovery_mode)?;  // Value
+        if let Some(address_discovery_mode) = tp.address_discovery_mode {
+            TransportParams::encode_param(&mut b, 0x9f81a176, 1)?;
+            b.put_u8(address_discovery_mode)?;
         }
 
         let out_len = b.off();
@@ -9319,14 +9311,14 @@ mod tests {
             initial_source_connection_id: Some(b"woot woot".to_vec().into()),
             retry_source_connection_id: Some(b"retry".to_vec().into()),
             max_datagram_frame_size: Some(32),
-            address_discovery: Some(2),
+            address_discovery_mode: Some(1),
             unknown_params: Default::default(),
         };
 
         let mut raw_params = [42; 256];
         let raw_params =
             TransportParams::encode(&tp, true, &mut raw_params).unwrap();
-        assert_eq!(raw_params.len(), 97);
+        assert_eq!(raw_params.len(), 104);
 
         let new_tp = TransportParams::decode(raw_params, false, None).unwrap();
 
@@ -9351,14 +9343,14 @@ mod tests {
             initial_source_connection_id: Some(b"woot woot".to_vec().into()),
             retry_source_connection_id: None,
             max_datagram_frame_size: Some(32),
-            address_discovery: Some(2),
+            address_discovery_mode: Some(1),
             unknown_params: Default::default(),
         };
 
         let mut raw_params = [42; 256];
         let raw_params =
             TransportParams::encode(&tp, false, &mut raw_params).unwrap();
-        assert_eq!(raw_params.len(), 72);
+        assert_eq!(raw_params.len(), 79);
 
         let new_tp = TransportParams::decode(raw_params, true, None).unwrap();
 
@@ -17952,12 +17944,13 @@ mod obs_addr_tests {
     #[test]
     fn observed_address_exchange_ipv4() {
         let mut pipe = testing::Pipe::new().unwrap();
+        // Realize the handshake to establish the connection
         assert_eq!(pipe.handshake(), Ok(()));
 
-        // Simule l’envoi d’une frame ObservedAddress du client vers le serveur
+        // Simulate the sending of an ObservedAddress frame from the client to the server
         let observed_addr = "192.0.2.1".parse().unwrap();
         let frame = frame::Frame::ObservedAddress {
-            obs_frame_type: 0,
+            obs_frame_type: 0x9f81a6,
             sequence_number: 2,
             address: observed_addr,
             port: 4242,
@@ -17966,13 +17959,14 @@ mod obs_addr_tests {
         let pkt_type = packet::Type::Short;
         let mut buf = [0; 1500];
         let written = testing::encode_pkt(&mut pipe.client, pkt_type, &[frame], &mut buf).unwrap();
+        eprintln!("client sent {} bytes", written);
         assert_eq!(pipe.server_recv(&mut buf[..written]), Ok(written));
 
 
-        // Vérifie que l’adresse a bien été stockée côté serveur
+        // Check that the address has been stored correctly on the server side
         let path = pipe.server.paths.get_active().unwrap();
-        println!("Observed address: {:?}", path.observed_peer_address);
-        println!("Expected address: {:?}", (observed_addr, 4242));
+        eprintln!("Observed address: {:?}", path.observed_peer_address);
+        eprintln!("Expected address: {:?}", (observed_addr, 4242));
         assert_eq!(path.observed_peer_address, Some((observed_addr, 4242)));
     }
 

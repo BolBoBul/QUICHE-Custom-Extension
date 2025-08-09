@@ -352,13 +352,16 @@ impl Frame {
 
             // We attribute the value 0x9f81a176 to the ObservedAddress frame type for interoperability with the draft-ietf-quic-address-discovery-00.
             
-            0x9f81a6..=0x9f81a7 => {
+            0x9f81a6 | 0x9f81a7 => {
                 let obs_frame_type = frame_type; // Frame Type
 
                 let sequence_number = b.get_varint()?; // Sequence Number
             
                 let address = if frame_type & 0x01 == 0 { // We determine IP type based on the Least Significant Bit
                     // IPv4 Address
+                    if b.cap() < 4 {
+                        return Err(Error::BufferTooShort);
+                    }
                     let addr = b.get_bytes(4)?; // For IPv4
                     if addr.len() != 4 {
                         return Err(Error::BufferTooShort);
@@ -366,7 +369,10 @@ impl Frame {
                     let addr: [u8; 4] = addr.buf().try_into().map_err(|_| Error::BufferTooShort)?;
                     std::net::IpAddr::V4(Ipv4Addr::from(addr))
                 } else {
-                    // Adresse IPv6
+                    // IPv6 Address
+                    if b.cap() < 16 {
+                        return Err(Error::BufferTooShort);
+                    }
                     let addr = b.get_bytes(16)?; // For IPv6
                     if addr.len() != 16 {
                         return Err(Error::BufferTooShort);
@@ -378,7 +384,11 @@ impl Frame {
                     }
                     std::net::IpAddr::V6(Ipv6Addr::from(segments))
                 };
-            
+
+                // Check that the buffer has enough space for the port (2 bytes)
+                if b.cap() < 2 {
+                    return Err(Error::BufferTooShort);
+                }
                 let port = b.get_u16()?; // Port
             
                 Frame::ObservedAddress {
@@ -388,49 +398,6 @@ impl Frame {
                     port,
                 }
             }
-
-            /*
-            0x9f81a6 => {
-                let frame_type = obs_frame_type; // Type de la frame
-                let sequence_number = b.get_varint()?; // Numéro de séquence
-
-                let address = {
-                    let addr = b.get_bytes(4)?;
-                    if addr.len() != 4 {
-                        return Err(Error::BufferTooShort);
-                    }
-                    let addr: [u8; 4] = addr.buf().try_into().map_err(|_| Error::BufferTooShort)?;
-                    std::net::IpAddr::V4(Ipv4Addr::from(addr))
-                };
-                
-                let port = b.get_u16()?; // Port
-
-                Frame::ObservedAddress {
-                    obs_frame_type,
-                    sequence_number,
-                    address,
-                    port,
-                }
-            }
-
-            0x9f81a7 => {
-                let frame_type = obs_frame_type; // Type de la frame
-                let sequence_number = b.get_varint()?; // Numéro de séquence
-
-                let address = {
-                    let addr = b.get_bytes(16)?;
-                    if addr.len() != 16 {
-                        return Err(Error::BufferTooShort);
-                    }
-                    let bytes: &[u8] = addr.buf();
-                    let mut segments = [0u16; 8];
-                    for i in 0..8 {
-                        segments[i] = u16::from_be_bytes([bytes[2 * i], bytes[2 * i + 1]]);
-                    }
-                    std::net::IpAddr::V6(Ipv6Addr::from(segments))
-                };
-            }
-            */
 
             _ => return Err(Error::InvalidFrame),
         };
@@ -2417,9 +2384,23 @@ mod obs_addr_tests {
     }
 
     #[test]
-    fn test_invalid_ipv4_buffer() {
-        let d = [0; 3]; // Buffer too small buffer for an IPv4 address
-        let mut b = octets::Octets::with_slice(&d);
+    fn buffer_too_short_4() {
+        // Create a buffer that contains the frame type 0x9f81a6 and sequence number but not enough for the IPv4 address
+        // This should trigger a BufferTooShort error
+        let mut d = [0u8; 128];
+        let mut temp_buf = octets::OctetsMut::with_slice(&mut d);
+
+        // Encode the frame type 0x9f81a6
+        temp_buf.put_varint(0x9f81a6).unwrap();
+        // Encode the sequence number (e.g. 0)
+        temp_buf.put_varint(0).unwrap();
+        // Add only 2 bytes instead of the 4 required for IPv4
+        temp_buf.put_u16(0x1234).unwrap();
+        
+        let used_len = 128 - temp_buf.cap();
+        let test_data = &d[..used_len];
+        
+        let mut b = octets::Octets::with_slice(test_data);
         assert!(matches!(
             Frame::from_bytes(&mut b, packet::Type::Short),
             Err(Error::BufferTooShort)
@@ -2427,9 +2408,22 @@ mod obs_addr_tests {
     }
 
     #[test]
-    fn test_invalid_ipv6_buffer() {
-        let d = [0; 15]; // Buffer too small for an IPv6 address
-        let mut b = octets::Octets::with_slice(&d);
+    fn buffer_too_short_6() {
+        // Create a buffer that contains the frame type 0x9f81a7 and sequence number but not enough for the IPv6 address
+        let mut d = [0u8; 128];
+        let mut temp_buf = octets::OctetsMut::with_slice(&mut d);
+
+        // Encode the frame type 0x9f81a7
+        temp_buf.put_varint(0x9f81a7).unwrap();
+        // Encode the sequence number (e.g. 0)
+        temp_buf.put_varint(0).unwrap();
+        // Add only 8 bytes instead of the 16 required for IPv6
+        temp_buf.put_u64(0x1234567890abcdef).unwrap();
+        
+        let used_len = 128 - temp_buf.cap();
+        let test_data = &d[..used_len];
+        
+        let mut b = octets::Octets::with_slice(test_data);
         assert!(matches!(
             Frame::from_bytes(&mut b, packet::Type::Short),
             Err(Error::BufferTooShort)
