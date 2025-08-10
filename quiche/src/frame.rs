@@ -210,7 +210,6 @@ impl Frame {
         b: &mut octets::Octets, pkt: packet::Type,
     ) -> Result<Frame> {
         let frame_type = b.get_varint()?;
-        //eprintln!("Decoding frame type: {}", frame_type);
 
         let frame = match frame_type {
             0x00 => {
@@ -440,7 +439,6 @@ impl Frame {
 
     pub fn to_bytes(&self, b: &mut octets::OctetsMut) -> Result<usize> {
         let before = b.cap();
-        //eprintln!("Encoding frame: {:?}", self);
 
         match self {
             Frame::Padding { len } => {

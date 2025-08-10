@@ -4393,39 +4393,46 @@ impl Connection {
 
         // Create a single ObservedAddress frame
         if (pkt_type == packet::Type::Short || pkt_type == packet::Type::ZeroRTT) && !is_closing && path.active() && !path.observed_address_sent {
-            // Checking if the peer node asked to receive our address
-            if let Some(peer_ad_mode) = self.peer_transport_params.address_discovery_mode {
-                if peer_ad_mode == 1 || peer_ad_mode == 2 {
-                    // Check if we are okay to send the address
-                    if let Some(self_addr_mode) = self.local_transport_params.address_discovery_mode {
-                        if self_addr_mode == 0 || self_addr_mode == 2 {
-                            // Determine the type of address (v4 or v6).
-                            let addr = path.local_addr();
-                            let (addr_type, address) = if addr.is_ipv4() {
-                                (0x9f81a6, addr.ip())
-                            } else if addr.is_ipv6() {
-                                (0x9f81a7, addr.ip())
-                            } else {
-                                return Err(Error::InvalidState);
-                            };
+            let self_addr_mode = self.local_transport_params.address_discovery_mode;
+            let peer_ad_mode = self.peer_transport_params.address_discovery_mode;
 
-                            let frame = frame::Frame::ObservedAddress {
-                                obs_frame_type: addr_type,
-                                address: address,
-                                port: addr.port(),
-                                sequence_number: path.observed_address_sequence,
-                            };
+            if self_addr_mode.is_some() && peer_ad_mode.is_some() {
+                // We have negotiated address discovery mode
+                if self_addr_mode == Some(0) || self_addr_mode == Some(2) {
+                    // self_addr_mode == 0 or 2 which means we are allowed to send ObservedAddress frames
+                    if peer_ad_mode == Some(1) || peer_ad_mode == Some(2) {
+                        // peer_ad_mode == 1 or 2 which means we are allowed to send ObservedAddress frames
+                        let addr = path.local_addr();
+                        let (addr_type, address) = if addr.is_ipv4() {
+                            (0x9f81a6, addr.ip())
+                        } else if addr.is_ipv6() {
+                            (0x9f81a7, addr.ip())
+                        } else {
+                            return Err(Error::InvalidState);
+                        };
 
-                            if push_frame_to_pkt!(b, frames, frame, left) {
-                                path.observed_address_sent = true;
-                                ack_eliciting = true;
-                                in_flight = true;
-                                // We increment the sequence number only if the frame has been sent
-                                path.observed_address_sequence += 1;
-                            }
+                        let frame = frame::Frame::ObservedAddress {
+                            obs_frame_type: addr_type,
+                            address: address,
+                            port: addr.port(),
+                            sequence_number: path.observed_address_send_sequence,
+                        };
+
+                        if push_frame_to_pkt!(b, frames, frame, left) {
+                            ack_eliciting = true;
+                            in_flight = true;
+                            // We increment the sequence number only if the frame has been sent
+                            path.observed_address_send_sequence += 1;
+                            path.observed_address_sent = true;
                         }
+
                     }
+                } else {
+                    // self_addr_mode == 1 which means we are only allowed to receive ObservedAddress frames
                 }
+
+            } else {
+                eprintln!("Observed address extension not negotiated (extension not activated)");
             }
         }
 
@@ -6815,18 +6822,25 @@ impl Connection {
             );
         }
 
-        if let Some(address_discovery_mode) = peer_params.address_discovery_mode {
-            if address_discovery_mode > 2 {
-                return Err(Error::TransportParameterError);
-            }
-        }
-
+        // Handle address_discovery_mode negotiation.
+        // Only process the peer's address_discovery_mode if we have configured one locally
+        let negotiated_address_discovery_mode = match (self.local_transport_params.address_discovery_mode, peer_params.address_discovery_mode) {
+            // Both sides have configured address discovery mode.
+            (Some(_local_mode), Some(peer_mode)) => {
+                if peer_mode > 2 {
+                    return Err(Error::InvalidTransportParam);
+                }
+                Some(peer_mode)
+            },
+            _ => None,
+        };
 
         // Record the max_active_conn_id parameter advertised by the peer.
         self.ids
             .set_source_conn_id_limit(peer_params.active_conn_id_limit);
 
         self.peer_transport_params = peer_params;
+        self.peer_transport_params.address_discovery_mode = negotiated_address_discovery_mode;
 
         Ok(())
     }
@@ -7533,11 +7547,11 @@ impl Connection {
                 // Process the received ObservedAddress frame.
 
                 let path = self.paths.get_mut(recv_path_id)?;
-                let obs_addr_seq = path.observed_address_sequence;
+                let last_recv_seq = path.observed_address_recv_sequence;
 
                 // Check if the sequence number is valid.
-                if sequence_number > obs_addr_seq {
-                    let self_ad_mode = self.local_transport_params.address_discovery;
+                if sequence_number > last_recv_seq {
+                    let self_ad_mode = self.local_transport_params.address_discovery_mode;
                     match self_ad_mode {
                         Some(1) | Some(2) => {
                             // 1: Receive only
@@ -7566,22 +7580,21 @@ impl Connection {
                                 },
                             };
                             path.observed_peer_address = Some ((address, port));
-                            path.observed_address_sequence = sequence_number;
+                            path.observed_address_recv_sequence = sequence_number;
                         },
 
                         Some(0) => {
-                            // 0: Disabled
-                            // No action needed, just ignore the frame.
+                            // 0: Disabled. No action needed, just ignore the frame.
+                            path.observed_address_recv_sequence = sequence_number;
                         },
 
                         _ => {
-                            eprintln!("{} Invalid address discovery mode: {:?}", self.trace_id, self.local_transport_params.address_discovery_mode);
                             return Err(Error::ProtocolViolation);
                         }
                     }
                 }
-                // If sequence_number is not greater than last_recv_seq, it means
-                // that the frame is a duplicate, so we ignore it.
+                eprintln!("{} Ignoring duplicate ObservedAddress frame", self.trace_id);
+                // If sequence_number is not greater than last_recv_seq, it means that the frame is a duplicate, so we ignore it.
             }
 
         }
@@ -17957,7 +17970,9 @@ mod obs_addr_tests {
     use crate::testing;
 
     #[test]
-    fn address_discovery_mode_negotiation() {
+    fn address_discovery_mode_negotiation_successful() {
+        // Both client and server support address discovery mode.
+        // Client sets address_discovery_mode to 2 (both provide and receive observations)
         let mut config = Config::new(crate::PROTOCOL_VERSION).unwrap();
         config.load_cert_chain_from_pem_file("examples/cert.crt").unwrap();
         config.load_priv_key_from_pem_file("examples/cert.key").unwrap();
@@ -17980,29 +17995,30 @@ mod obs_addr_tests {
     }
 
     #[test]
-    fn observed_address_exchange_ipv6() {
-        let mut pipe = testing::Pipe::new().unwrap();
+    fn address_discovery_mode_negotiation_unsuccessful() {
+        // Configuration for the client - with address discovery enabled
+        let mut client_config = Config::new(crate::PROTOCOL_VERSION).unwrap();
+        client_config.set_application_protos(&[b"proto1", b"proto2"]).unwrap();
+        client_config.verify_peer(false);
+        client_config.set_address_discovery_mode(2);
+
+        // Configuration for the server - without address discovery enabled
+        let mut server_config = Config::new(crate::PROTOCOL_VERSION).unwrap();
+        server_config.load_cert_chain_from_pem_file("examples/cert.crt").unwrap();
+        server_config.load_priv_key_from_pem_file("examples/cert.key").unwrap();
+        server_config.set_application_protos(&[b"proto1", b"proto2"]).unwrap();
+        server_config.verify_peer(false);
+
+        let mut pipe = testing::Pipe::with_client_and_server_config(&mut client_config,&mut server_config,).unwrap();
+
+        // Handshake should succeed, but address discovery mode should not be negotiated
         assert_eq!(pipe.handshake(), Ok(()));
 
-        // Simule l’envoi d’une frame ObservedAddress du serveur vers le client
-        let observed_addr = "::1".parse().unwrap();
-        let frame = frame::Frame::ObservedAddress {
-            obs_frame_type: 1,
-            sequence_number: 2,
-            address: observed_addr,
-            port: 1234,
-        };
-
-        let pkt_type = packet::Type::Short;
-        let mut buf = [0; 1500];
-        let written = testing::encode_pkt(&mut pipe.server, pkt_type, &[frame], &mut buf).unwrap();
-        assert_eq!(pipe.client_recv(&mut buf[..written]), Ok(written));
-
-        // Vérifie que l’adresse a bien été stockée côté client
-        let path = pipe.client.paths.get_active().unwrap();
-        println!("Observed address: {:?}", path.observed_peer_address);
-        println!("Expected address: {:?}", (observed_addr, 1234));
-        assert_eq!(path.observed_peer_address, Some((observed_addr, 1234)));
+        // Client should have address discovery mode set, but server should not
+        assert_eq!(pipe.client.local_transport_params.address_discovery_mode, Some(2));
+        assert_eq!(pipe.server.peer_transport_params().unwrap().address_discovery_mode, None);  // Since the extension has not been negotiated, it should not be present
+        assert_eq!(pipe.server.local_transport_params.address_discovery_mode, None);
+        assert_eq!(pipe.client.peer_transport_params().unwrap().address_discovery_mode, None);
     }
 
     #[test]
