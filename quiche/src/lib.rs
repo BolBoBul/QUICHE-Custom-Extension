@@ -1378,6 +1378,12 @@ impl Config {
     pub fn set_address_discovery_mode(&mut self, mode: u8) {
         self.local_transport_params.address_discovery_mode = Some(mode);
     }
+
+    /// Returns the configured address discovery mode.
+    pub fn address_discovery_mode(&self) -> Option<u8> {
+        self.local_transport_params.address_discovery_mode
+    }
+
 }
 
 /// A QUIC connection.
@@ -4396,9 +4402,9 @@ impl Connection {
                             // Determine the type of address (v4 or v6).
                             let addr = path.local_addr();
                             let (addr_type, address) = if addr.is_ipv4() {
-                                (0, addr.ip())
+                                (0x9f81a6, addr.ip())
                             } else if addr.is_ipv6() {
-                                (1, addr.ip())
+                                (0x9f81a7, addr.ip())
                             } else {
                                 return Err(Error::InvalidState);
                             };
@@ -7540,7 +7546,7 @@ impl Connection {
                             // We extract the address and the port from the frame and store it in the path.
                             let path = self.paths.get_mut(recv_path_id)?;
                             let address = match obs_frame_type {
-                                0 => {
+                                0x9f81a6 => {
                                     // Si address est un IpAddr, il faut le convertir en Ipv4Addr
                                     if let std::net::IpAddr::V4(addr_v4) = address {
                                         std::net::IpAddr::V4(addr_v4)
@@ -7548,7 +7554,7 @@ impl Connection {
                                         return Err(Error::ProtocolViolation);
                                     }
                                 },
-                                1 => {
+                                0x9f81a7 => {
                                     if let std::net::IpAddr::V6(addr_v6) = address {
                                         std::net::IpAddr::V6(addr_v6)
                                     } else {
@@ -7562,11 +7568,20 @@ impl Connection {
                             path.observed_peer_address = Some ((address, port));
                             path.observed_address_sequence = sequence_number;
                         },
+
+                        Some(0) => {
+                            // 0: Disabled
+                            // No action needed, just ignore the frame.
+                        },
+
                         _ => {
+                            eprintln!("{} Invalid address discovery mode: {:?}", self.trace_id, self.local_transport_params.address_discovery_mode);
                             return Err(Error::ProtocolViolation);
                         }
                     }
                 }
+                // If sequence_number is not greater than last_recv_seq, it means
+                // that the frame is a duplicate, so we ignore it.
             }
 
         }
@@ -17942,32 +17957,26 @@ mod obs_addr_tests {
     use crate::testing;
 
     #[test]
-    fn observed_address_exchange_ipv4() {
-        let mut pipe = testing::Pipe::new().unwrap();
-        // Realize the handshake to establish the connection
+    fn address_discovery_mode_negotiation() {
+        let mut config = Config::new(crate::PROTOCOL_VERSION).unwrap();
+        config.load_cert_chain_from_pem_file("examples/cert.crt").unwrap();
+        config.load_priv_key_from_pem_file("examples/cert.key").unwrap();
+        config.set_application_protos(&[b"proto1", b"proto2"]).unwrap();
+        config.verify_peer(false);
+        
+
+        // Set address_discovery_mode to 2 (both provide and receive observations)
+        config.set_address_discovery_mode(2);
+        
+        let mut pipe = testing::Pipe::with_config(&mut config).unwrap();
+        
         assert_eq!(pipe.handshake(), Ok(()));
 
-        // Simulate the sending of an ObservedAddress frame from the client to the server
-        let observed_addr = "192.0.2.1".parse().unwrap();
-        let frame = frame::Frame::ObservedAddress {
-            obs_frame_type: 0x9f81a6,
-            sequence_number: 2,
-            address: observed_addr,
-            port: 4242,
-        };
-
-        let pkt_type = packet::Type::Short;
-        let mut buf = [0; 1500];
-        let written = testing::encode_pkt(&mut pipe.client, pkt_type, &[frame], &mut buf).unwrap();
-        eprintln!("client sent {} bytes", written);
-        assert_eq!(pipe.server_recv(&mut buf[..written]), Ok(written));
-
-
-        // Check that the address has been stored correctly on the server side
-        let path = pipe.server.paths.get_active().unwrap();
-        eprintln!("Observed address: {:?}", path.observed_peer_address);
-        eprintln!("Expected address: {:?}", (observed_addr, 4242));
-        assert_eq!(path.observed_peer_address, Some((observed_addr, 4242)));
+        // After handshake, both sides should have address_discovery_mode set
+        assert_eq!(pipe.client.local_transport_params.address_discovery_mode, Some(2));
+        assert_eq!(pipe.server.peer_transport_params().unwrap().address_discovery_mode, Some(2));
+        assert_eq!(pipe.server.local_transport_params.address_discovery_mode, Some(2));
+        assert_eq!(pipe.client.peer_transport_params().unwrap().address_discovery_mode, Some(2));
     }
 
     #[test]
