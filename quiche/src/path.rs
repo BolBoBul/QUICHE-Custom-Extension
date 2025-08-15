@@ -210,8 +210,8 @@ pub struct Path {
     /// Whether or not the observed address has been sent
     pub observed_address_sent: bool,
 
-    /// The sequence number of the last sent observed address.
-    pub observed_address_send_sequence: u64,
+    /// Next sequence number for ObservedAddress frames on this path.
+    pub observed_address_sequence: u64,
 
     /// The sequence number of the last observed address sent by the peer.
     pub observed_address_recv_sequence: u64,
@@ -268,7 +268,7 @@ impl Path {
             migrating: false,
             needs_ack_eliciting: false,
             observed_address_sent: false,
-            observed_address_send_sequence: 0,
+            observed_address_sequence: 1, // Start at 1
             observed_address_recv_sequence: 0,
             observed_peer_address: None,
         }
