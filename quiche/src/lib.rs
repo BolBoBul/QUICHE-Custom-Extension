@@ -7050,7 +7050,6 @@ impl Connection {
         recv_path_id: usize, epoch: packet::Epoch, now: time::Instant,
     ) -> Result<()> {
         trace!("{} rx frm {:?}", self.trace_id, frame);
-        eprintln!("{} process frame: {:?}", self.trace_id, frame);
 
         match frame {
             frame::Frame::Padding { .. } => (),
