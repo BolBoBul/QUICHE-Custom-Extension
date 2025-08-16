@@ -4394,33 +4394,36 @@ impl Connection {
         // Create a single ObservedAddress frame
         if (pkt_type == packet::Type::Short || pkt_type == packet::Type::ZeroRTT) &&
             !is_closing && path.active() && !path.observed_address_sent {
-
             // Check if we should send ObservedAddress based on negotiated mode
-            let should_send = if let Some(peer_mode) = self.peer_transport_params.address_discovery_mode {
-                // We send if peer wants to receive (mode 1 or 2)
-                peer_mode == 1 || peer_mode == 2
-            } else {
-                false
-            };
-
-            if should_send {
-                let peer_addr = path.peer_addr();
-                let (obs_frame_type, port) = match peer_addr {
-                    SocketAddr::V4(addr) => (0x9f81a6, addr.port()),
-                    SocketAddr::V6(addr) => (0x9f81a7, addr.port()),
+            if let Some(local_ad) = self.local_transport_params.address_discovery_mode {
+                let should_send = if let Some(peer_mode) = self.peer_transport_params.address_discovery_mode {
+                    // We send if peer wants to receive (mode 1 or 2)
+                    (peer_mode == 1 || peer_mode == 2) && (local_ad == 2 || local_ad == 0)
+                } else {
+                    false
                 };
 
-                let frame = frame::Frame::ObservedAddress {
-                    obs_frame_type,
-                    sequence_number: path.observed_address_sequence,
-                    address: peer_addr.ip(),
-                    port,
-                };
+                if should_send {
+                    eprintln!("Creating ObservedAddress frame in packet type: {:?}", pkt_type);
+                    let peer_addr = path.peer_addr();
+                    let (obs_frame_type, port) = match peer_addr {
+                        SocketAddr::V4(addr) => (0x9f81a6, addr.port()),
+                        SocketAddr::V6(addr) => (0x9f81a7, addr.port()),
+                    };
 
-                if push_frame_to_pkt!(b, frames, frame, left) {
-                    ack_eliciting = true;
-                    path.observed_address_sent = true;
-                    path.observed_address_sequence += 1;
+                    let frame = frame::Frame::ObservedAddress {
+                        obs_frame_type,
+                        sequence_number: path.observed_address_sequence,
+                        address: peer_addr.ip(),
+                        port,
+                    };
+
+                    if push_frame_to_pkt!(b, frames, frame, left) {
+                        eprintln!("Sending ObservedAddress frame");
+                        ack_eliciting = true;
+                        path.observed_address_sent = true;
+                        path.observed_address_sequence += 1;
+                    }
                 }
             }
         }
@@ -7047,6 +7050,7 @@ impl Connection {
         recv_path_id: usize, epoch: packet::Epoch, now: time::Instant,
     ) -> Result<()> {
         trace!("{} rx frm {:?}", self.trace_id, frame);
+        eprintln!("{} process frame: {:?}", self.trace_id, frame);
 
         match frame {
             frame::Frame::Padding { .. } => (),
@@ -7534,7 +7538,7 @@ impl Connection {
             
             frame::Frame::ObservedAddress { obs_frame_type, address, port, sequence_number } => {
                 // Process the received ObservedAddress frame.
-
+                eprintln!("{} ObservedAddress frame received: type={:?}, address={:?}, port={}", self.trace_id, obs_frame_type, address, port);
                 let path = self.paths.get_mut(recv_path_id)?;
                 let last_recv_seq = path.observed_address_recv_sequence;
 
@@ -7574,6 +7578,7 @@ impl Connection {
 
                         Some(0) => {
                             // 0: Disabled. No action needed, just ignore the frame.
+                            eprintln!("{} ObservedAddress frame received but not desired", self.trace_id);
                             path.observed_address_recv_sequence = sequence_number;
                         },
 
@@ -7915,6 +7920,7 @@ impl Connection {
 
         if let Ok(path) = self.paths.get_mut(new_pid) {
             path.observed_address_sent = false;
+            // Ne pas réinitialiser observed_address_sequence
         }
 
         let no_spare_dcid =
@@ -18060,8 +18066,44 @@ mod obs_addr_tests {
     }
 
     #[test]
-    fn observed_address_one_way() {
+    fn observed_address_client_send_server_accept() {
         // Client wants to receive ObservedAddress, server only wants to send it
+        let mut client_config = Config::new(crate::PROTOCOL_VERSION).unwrap();
+        client_config.set_application_protos(&[b"proto1", b"proto2"]).unwrap();
+        client_config.verify_peer(false);
+        client_config.set_address_discovery_mode(0); // Client does not want to send, just receive ObservedAddress
+
+        let mut server_config = Config::new(crate::PROTOCOL_VERSION).unwrap();
+        server_config.load_cert_chain_from_pem_file("examples/cert.crt").unwrap();
+        server_config.load_priv_key_from_pem_file("examples/cert.key").unwrap();
+        server_config.set_application_protos(&[b"proto1", b"proto2"]).unwrap();
+        server_config.verify_peer(false);
+        server_config.set_address_discovery_mode(1); // Server does not want to receive, just sends ObservedAddress
+
+        let mut pipe = testing::Pipe::with_client_and_server_config(
+            &mut client_config,
+            &mut server_config,
+        ).unwrap();
+
+        assert_eq!(pipe.handshake(), Ok(()));
+
+        // After handshake, the client should have address_discovery_mode 0 and the server 1
+        assert_eq!(pipe.client.local_transport_params.address_discovery_mode, Some(0));
+        assert_eq!(pipe.server.local_transport_params.address_discovery_mode, Some(1));
+        assert_eq!(pipe.client.peer_transport_params().unwrap().address_discovery_mode, Some(1));
+        assert_eq!(pipe.server.peer_transport_params().unwrap().address_discovery_mode, Some(0));
+
+        // The client should send ObservedAddress frames
+        let mut buf = [0; 1500];
+        let (len, _) = pipe.client.send(&mut buf).unwrap();
+        let frames = testing::decode_pkt(&mut pipe.server, &mut buf[..len]).unwrap();
+        let has_observed_address = frames.iter().any(|frame| matches!(frame, frame::Frame::ObservedAddress { .. }));
+        assert!(has_observed_address, "The client must send ObservedAddress to the server");
+        
+    }
+
+    #[test]
+    fn observed_address_server_send_client_accept() {
         let mut client_config = Config::new(crate::PROTOCOL_VERSION).unwrap();
         client_config.set_application_protos(&[b"proto1", b"proto2"]).unwrap();
         client_config.verify_peer(false);
@@ -18087,24 +18129,21 @@ mod obs_addr_tests {
         assert_eq!(pipe.client.peer_transport_params().unwrap().address_discovery_mode, Some(0));
         assert_eq!(pipe.server.peer_transport_params().unwrap().address_discovery_mode, Some(1));
 
-
-        
     }
 
     #[test]
-    fn observed_address_both_ways() {
-        // Both want to send and receive
+    fn observed_address_client_and_server_send() {
         let mut client_config = Config::new(crate::PROTOCOL_VERSION).unwrap();
         client_config.set_application_protos(&[b"proto1", b"proto2"]).unwrap();
         client_config.verify_peer(false);
-        client_config.set_address_discovery_mode(2); // Client wants everything
+        client_config.set_address_discovery_mode(0); // Client does not want to receive, just send ObservedAddress
 
         let mut server_config = Config::new(crate::PROTOCOL_VERSION).unwrap();
         server_config.load_cert_chain_from_pem_file("examples/cert.crt").unwrap();
         server_config.load_priv_key_from_pem_file("examples/cert.key").unwrap();
         server_config.set_application_protos(&[b"proto1", b"proto2"]).unwrap();
         server_config.verify_peer(false);
-        server_config.set_address_discovery_mode(2); // Server wants everything
+        server_config.set_address_discovery_mode(0); // Server does not want to receive, just send ObservedAddress
 
         let mut pipe = testing::Pipe::with_client_and_server_config(
             &mut client_config,
@@ -18113,25 +18152,45 @@ mod obs_addr_tests {
 
         assert_eq!(pipe.handshake(), Ok(()));
 
-        // After handshake, both should have address_discovery_mode 2
-        assert_eq!(pipe.client.local_transport_params.address_discovery_mode, Some(2));
-        assert_eq!(pipe.server.local_transport_params.address_discovery_mode, Some(2));
-        assert_eq!(pipe.client.peer_transport_params().unwrap().address_discovery_mode, Some(2));
-        assert_eq!(pipe.server.peer_transport_params().unwrap().address_discovery_mode, Some(2));
+        // After handshake, the client should have address_discovery_mode 0 and the server 0
+        assert_eq!(pipe.client.local_transport_params.address_discovery_mode, Some(0));
+        assert_eq!(pipe.server.local_transport_params.address_discovery_mode, Some(0));
+        assert_eq!(pipe.client.peer_transport_params().unwrap().address_discovery_mode, Some(0));
+        assert_eq!(pipe.server.peer_transport_params().unwrap().address_discovery_mode, Some(0));
 
-        // Both should send ObservedAddress frames
-        let mut buf = [0; 1500];
-        let (len, _) = pipe.client.send(&mut buf).unwrap();
-        let frames = testing::decode_pkt(&mut pipe.server, &mut buf[..len]).unwrap();
-        let has_observed_address = frames.iter().any(|frame| matches!(frame, frame::Frame::ObservedAddress { .. }));
-        assert!(has_observed_address, "The client must send ObservedAddress to the server");
-
-        let (len, _) = pipe.server.send(&mut buf).unwrap();
-        let frames = testing::decode_pkt(&mut pipe.client, &mut buf[..len]).unwrap();
-        let has_observed_address = frames.iter().any(|frame| matches!(frame, frame::Frame::ObservedAddress { .. }));
-        assert!(has_observed_address, "The server must send ObservedAddress to the client");
     }
 
+    #[test]
+    fn observed_address_client_and_server_receive () {
+        let mut client_config = Config::new(crate::PROTOCOL_VERSION).unwrap();
+        client_config.set_application_protos(&[b"proto1", b"proto2"]).unwrap();
+        client_config.verify_peer(false);
+        client_config.set_address_discovery_mode(1); // Client wants to receive ObservedAddress
+
+        let mut server_config = Config::new(crate::PROTOCOL_VERSION).unwrap();
+        server_config.load_cert_chain_from_pem_file("examples/cert.crt").unwrap();
+        server_config.load_priv_key_from_pem_file("examples/cert.key").unwrap();
+        server_config.set_application_protos(&[b"proto1", b"proto2"]).unwrap();
+        server_config.verify_peer(false);
+        server_config.set_address_discovery_mode(1); // Server wants to receive ObservedAddress
+
+        let mut pipe = testing::Pipe::with_client_and_server_config(
+            &mut client_config,
+            &mut server_config,
+        ).unwrap();
+
+        assert_eq!(pipe.handshake(), Ok(()));
+
+        // After handshake, the client should have address_discovery_mode 1 and the server 1
+        assert_eq!(pipe.client.local_transport_params.address_discovery_mode, Some(1));
+        assert_eq!(pipe.server.local_transport_params.address_discovery_mode, Some(1));
+        assert_eq!(pipe.client.peer_transport_params().unwrap().address_discovery_mode, Some(1));
+        assert_eq!(pipe.server.peer_transport_params().unwrap().address_discovery_mode, Some(1));
+
+
+    }
+
+    
 }
 
 pub use crate::packet::ConnectionId;
